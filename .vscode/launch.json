@@ -1,0 +1,19 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        
+        {
+            "name": "Python: Run demo.py",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/tools/train.py",
+            //"args": ["-c", "config/ps_gat.yaml", "-m", "checkpoint_epoch_200.pth"],
+            "args": ["-c", "config/ps_gat.yaml"],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "console": "integratedTerminal",
+            "pythonPath": "/root/anaconda3/envs/gcn_slots/bin/python"
+        }
+    ]
+}
