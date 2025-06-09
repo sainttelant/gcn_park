@@ -38,6 +38,8 @@ class PointDetectorBase(nn.Module):
         #print('data_dict:', data_dict)
         #t0 = time.time()
         data_dict = self.model(data_dict)
+        #print data_dict's keys
+        print(data_dict.keys())
         #t1 = time.time()
         if self.training:
             loss, tb_dict, disp_dict = self.get_training_loss(data_dict)
@@ -47,10 +49,15 @@ class PointDetectorBase(nn.Module):
             return ret_dict, tb_dict, disp_dict
         else:
             pred_dicts, ret_dicts = self.post_processing(data_dict)
+            
+            #pred_dicts, ret_dicts = self.post_processing_onnx(data_dict)
             #t2 = time.time()
             #print('point detect:', t1 - t0)
             #print('slot detect:', t2 - t1)
             return pred_dicts, ret_dicts
+        
+    def post_processing_onnx(self, data_dict):
+        return self.model.post_processing_onnx(data_dict)    
      
     def post_processing(self, data_dict):
         return self.model.post_processing(data_dict)

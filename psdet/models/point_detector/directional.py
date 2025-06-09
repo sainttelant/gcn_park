@@ -157,8 +157,63 @@ class PointDetector(nn.modules.Module):
                 points_full[:len(points_pred)] = points_np
             else:
                 points_full = points_np
-
             pred_dict = self.predict_slots(descriptor_map[b].unsqueeze(0), torch.Tensor(points_full).unsqueeze(0).cuda())
+            edges = pred_dict['edges_pred'][0]
+            n = points_np.shape[0]
+            m = points_full.shape[0]
+            
+            slots = []
+            for i in range(n):
+                for j in range(n):
+                    idx = i * m + j
+                    score = edges[0, idx]
+                    if score > 0.5:
+                        x1, y1 = points_np[i,:2]
+                        x2, y2 = points_np[j,:2]
+                        slot = (score, np.array([x1, y1, x2, y2]))
+                        slots.append(slot)
+
+            slots_pred.append(slots)
+
+        pred_dicts['points_pred'] = points_pred_batch
+        pred_dicts['slots_pred'] = slots_pred
+        return pred_dicts, ret_dicts
+    
+    def post_processing_onnx(self, data_dict):
+        ret_dicts = {}
+        pred_dicts = {}
+        
+        points_pred = data_dict['points_pred']
+        descriptor_map = data_dict['descriptor_map']
+        
+        points_pred_batch = []
+        slots_pred = []
+        for b, marks in enumerate(points_pred):
+            points_pred = get_predicted_points(marks, self.cfg.point_thresh, self.cfg.boundary_thresh)
+            points_pred_batch.append(points_pred)
+         
+            if len(points_pred) > 0:
+                points_np = np.concatenate([p[1].reshape(1, -1) for p in points_pred], axis=0)
+            else:
+                points_np = np.zeros((self.cfg.max_points, 2))
+
+            if points_np.shape[0] < self.cfg.max_points:
+                points_full = np.zeros((self.cfg.max_points, 2))
+                points_full[:len(points_pred)] = points_np
+            else:
+                points_full = points_np
+            
+            device = torch.device('cuda:1')
+
+            # 确保 descriptor_map[b] 在正确的设备上
+            descriptor_map_b = descriptor_map[b].unsqueeze(0).to(device).float()
+
+            # 确保 points_full 在正确的设备上
+            points_full_tensor = torch.tensor(points_full).unsqueeze(0).to(device).float()
+
+            # 调用 predict_slots 方法
+            pred_dict = self.predict_slots(descriptor_map_b, points_full_tensor)
+            #pred_dict = self.predict_slots(descriptor_map[b].unsqueeze(0), torch.Tensor(points_full).unsqueeze(0).cuda())
             edges = pred_dict['edges_pred'][0]
             n = points_np.shape[0]
             m = points_full.shape[0]

@@ -2,7 +2,8 @@
 # develop in container
 docker run --shm-size=16g --privileged -it --gpus all  -v /home/wilsxue/APA:/workspace/APA  --name gcn_wilson vad_torch1.12_x86_v1.0 /bin/bash
 
-
+# develop in container for export onnx 
+docker run --shm-size=16g --privileged -it --gpus '"device=1"'  -v /home/wilsxue/APA:/workspace/APA  --name gcn_onnx gcn_docker_conda /bin/bash
 
 # create a anaconda virtual environment for python3.6
 conda create -n gcn_slots python=3.10.0
@@ -18,3 +19,6 @@ pip install torch==2.0.0+cu118 torchvision==0.15.0+cu118 --index-url https://dow
 # run inference
 export PYTHONPATH=`pwd`
 python tools/demo.py -c config/ps_gat.yaml -m checkpoint_epoch_200.pth
+
+# export ot onnx 
+python3 tools/export_onnx.py -c config/ps_gat.yaml -m checkpoint_epoch_200.pth 

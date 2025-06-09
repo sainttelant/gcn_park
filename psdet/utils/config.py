@@ -102,12 +102,14 @@ def get_config():
     config.model_dir = config.cache_dir / 'models'
     config.log_dir = config.cache_dir / 'logs'
     config.output_dir = config.cache_dir / 'output'
+    config.save_onnx_dir = config.cache_dir / 'output_onnx'
     
     # create the experiments dirs
     config.cache_dir.resolve().mkdir(parents=True, exist_ok=True) 
     config.model_dir.resolve().mkdir(exist_ok=True)
     config.log_dir.resolve().mkdir(exist_ok=True)
     config.output_dir.resolve().mkdir(exist_ok=True)
+    config.save_onnx_dir.resolve().mkdir(exist_ok=True)
     
     cfg = Dict()
     merge_new_config(config=cfg, new_config=config)
