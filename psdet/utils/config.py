@@ -103,6 +103,8 @@ def get_config():
     config.log_dir = config.cache_dir / 'logs'
     config.output_dir = config.cache_dir / 'output'
     config.save_onnx_dir = config.cache_dir / 'output_onnx'
+    config.simplified_path = config.cache_dir / 'output_onnx'
+    config.image_size = [512, 512]
     
     # create the experiments dirs
     config.cache_dir.resolve().mkdir(parents=True, exist_ok=True) 

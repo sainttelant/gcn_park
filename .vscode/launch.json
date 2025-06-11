@@ -10,7 +10,8 @@
             //"args": ["-c", "config/ps_gat.yaml", "-m", "checkpoint_epoch_200.pth"],
             //"program": "${workspaceFolder}/tools/train.py",
             //"args": ["-c", "config/ps_gat.yaml"],
-            "program": "${workspaceFolder}/tools/export_onnx.py",
+            //"program": "${workspaceFolder}/tools/export_onnx.py",
+            "program": "${workspaceFolder}/tools/exportOnnx.py",
             "args": ["-c", "config/ps_gat.yaml", "-m", "checkpoint_epoch_200.pth"],
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"

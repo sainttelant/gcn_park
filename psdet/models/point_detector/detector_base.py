@@ -22,7 +22,16 @@ class PointDetectorBase(nn.Module):
         
     @property
     def mode(self):
-        return 'TRAIN' if self.training else 'TEST'
+        #return 'TRAIN' if self.training else 'TEST'
+        if self.training:
+            return 'TRAIN'
+        elif self.evaluation:
+            return 'EVAL'
+        elif self.export_onnx:
+            return 'ONNX'
+        else:
+            return 'UNknown'
+            
 
     def update_global_step(self):
         self.global_step += 1
@@ -47,7 +56,7 @@ class PointDetectorBase(nn.Module):
                 'loss': loss
             }
             return ret_dict, tb_dict, disp_dict
-        else:
+        elif self.cfg.evaluation:
             pred_dicts, ret_dicts = self.post_processing(data_dict)
             
             #pred_dicts, ret_dicts = self.post_processing_onnx(data_dict)
@@ -55,6 +64,8 @@ class PointDetectorBase(nn.Module):
             #print('point detect:', t1 - t0)
             #print('slot detect:', t2 - t1)
             return pred_dicts, ret_dicts
+        elif self.cfg.export_onnx:
+            return data_dict
         
     def post_processing_onnx(self, data_dict):
         return self.model.post_processing_onnx(data_dict)    
