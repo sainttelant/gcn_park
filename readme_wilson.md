@@ -22,3 +22,6 @@ python tools/demo.py -c config/ps_gat.yaml -m checkpoint_epoch_200.pth
 
 # export ot onnx 
 python3 tools/export_onnx.py -c config/ps_gat.yaml -m checkpoint_epoch_200.pth 
+
+
+# convert onnx to tensorrt version , and the tensorrt has been installed with 8.6.1.6 

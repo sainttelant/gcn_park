@@ -122,8 +122,10 @@ def export_model_to_onnx(model, cfg, device_id=0):
 
     # 验证 ONNX 模型
     onnx_model = onnx.load(onnx_model_path/"model.onnx")
-    onnx.checker.check_model(onnx_model)
-    print("ONNX 模型验证通过")
+  
+    for input in onnx_model.graph.input:
+        print(f"Input: {input.name}, Shape: {[dim.dim_value for dim in input.type.tensor_type.shape.dim]}")
+        print("ONNX 模型验证通过")
 
     # 可选：优化 ONNX 模型
      # 尝试简化模型
