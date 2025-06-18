@@ -3,6 +3,8 @@
 #include <chrono>
 #include <filesystem>  // 用于路径操作
 
+namespace fs = std::filesystem;
+
 void drawResults(cv::Mat& image, 
                  std::vector<std::vector<float>>& points,
                  std::vector<std::vector<psdet::ParkingSlot>>& slots) 
@@ -79,6 +81,17 @@ void drawResults(cv::Mat& image,
     cv::putText(image, stats, cv::Point(20, 30), 
                 cv::FONT_HERSHEY_DUPLEX, 0.8, cv::Scalar(200, 200, 100), 2);
 }
+std::vector<std::string> getJpgImagesInDirectory(const std::string& dir_path) {
+    std::vector<std::string> jpg_images;
+
+    for (const auto& entry : fs::directory_iterator(dir_path)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".jpg") {
+            jpg_images.push_back(entry.path().string());
+        }
+    }
+
+    return jpg_images;
+}
 
 
 int main() {
@@ -91,18 +104,9 @@ int main() {
     const int max_slots = 50;
 
     // 图片目录设置
-    const std::string image_dir = "/workspace/APA/gcn-parking-slot/datasets/parking_slot/testing/indoor-parking lot";
-    
-    // 获取所有JPG图片路径
-    std::vector<std::string> image_paths;
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(image_dir)) {
-        if (entry.is_regular_file() && 
-            (entry.path().extension() == ".jpg" || 
-             entry.path().extension() == ".jpeg")) {
-            image_paths.push_back(entry.path().string());
-        }
-    }
-    
+    const std::string image_dir = "/workspace/APA/gcn-parking-slot/images/";
+    std::vector<std::string> image_paths = getJpgImagesInDirectory(image_dir);
+
     if (image_paths.empty()) {
         std::cerr << "错误：未找到任何JPG图片！" << std::endl;
         return -1;
@@ -138,7 +142,7 @@ int main() {
         
     
         // 执行推理
-        std::vector<std::vector<float>> points;
+        std::vector<std::vector<psdet::KeyPoint>> points;
         std::vector<std::vector<psdet::ParkingSlot>> slots;
         
         auto start = std::chrono::high_resolution_clock::now();
@@ -155,16 +159,17 @@ int main() {
                   << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() 
                   << "ms" << std::endl;
         
-        // 可视化结果（可选）
-        if (!points.empty() && !points[0].empty()) {
-            std::cout << "  检测到点位: " << points[0].size()/3 << "个" << std::endl;
-            /* 这里可以添加可视化代码，如绘制点 */
-            drawResults(image, points, slots);
-        }
+        detector.visualizeResults(image, points, slots);
       
         
         // 保存结果图片（可选）
-        std::string output_path = img_path + "_result.jpg";
+        // create the folder of predictions under image_dir directory if it doesn't exist
+        std::string predictions_dir = image_dir + "predictions/";
+        if (!fs::exists(predictions_dir)) {
+            fs::create_directory(predictions_dir);
+        }
+
+        std::string output_path = predictions_dir + fs::path(img_path).filename().string()+"_c_result.jpg";
         cv::imwrite(output_path, image);
     }
     

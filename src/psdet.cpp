@@ -1,7 +1,7 @@
 #include "psdet.hpp"
 #include <algorithm>
 #include <cassert>
-
+#include <numeric>  // 修复：添加 std::iota 所需的头文件
 using namespace psdet;
 
 // 构造函数
@@ -312,41 +312,79 @@ void PsDet::preprocess(const cv::Mat& image, float* input) {
     }
 }
 
-// 后处理 - 修复索引错误[6](@ref)
-void PsDet::postprocess(std::vector<std::vector<float>>& output_points, 
-                        std::vector<std::vector<ParkingSlot>>& output_slots) {
-    output_points.clear();
-    output_slots.clear();
+std::vector<KeyPoint> PsDet::applyNMS(
+    const std::vector<KeyPoint>& points, 
+    float dist_thresh
+) {
+    std::vector<bool> suppressed(points.size(), false);
+    std::vector<KeyPoint> result;
     
-    // 处理点预测
-    for (int b = 0; b < max_batch_size_; ++b) {
-        std::vector<float> batch_points;
-        for (int i = 0; i < max_points_; ++i) {
-            size_t offset = b * max_points_ * 3 + i * 3;
-            float conf = output_points_h_[offset];
-            if (conf > 0.1f) {
-                batch_points.push_back(conf);
-                batch_points.push_back(output_points_h_[offset + 1]); // x
-                batch_points.push_back(output_points_h_[offset + 2]); // y
+    // 按置信度降序排序
+    std::vector<size_t> indices(points.size());
+    std::iota(indices.begin(), indices.end(), 0);
+    std::sort(indices.begin(), indices.end(), [&](size_t i, size_t j) {
+        return points[i].conf > points[j].conf;
+    });
+    
+    // 遍历所有点
+    for (size_t i = 0; i < indices.size(); ++i) {
+        if (suppressed[indices[i]]) continue;
+        result.push_back(points[indices[i]]);
+        
+        // 计算与后续点的距离
+        for (size_t j = i + 1; j < indices.size(); ++j) {
+            if (suppressed[indices[j]]) continue;
+            
+            float dx = points[indices[i]].x - points[indices[j]].x;
+            float dy = points[indices[i]].y - points[indices[j]].y;
+            float dist_sq = dx * dx + dy * dy;
+            
+            if (dist_sq < dist_thresh * dist_thresh) {
+                suppressed[indices[j]] = true;
             }
         }
-        output_points.push_back(batch_points);
+    }
+    return result;
+}
+
+// 后处理 - 修复索引错误[6](@ref)
+void PsDet::postprocess(std::vector<std::vector<KeyPoint>>& output_points,
+                        std::vector<std::vector<ParkingSlot>>& output_slots) 
+{
+   output_points.clear();
+    output_slots.clear();
+    
+    // 解析关键点输出 (shape: [batch, max_points, 3])
+    for (int b = 0; b < max_batch_size_; ++b) {
+        std::vector<KeyPoint> batch_points;
+        for (int i = 0; i < max_points_; ++i) {
+            const int base_idx = b * max_points_ * 3 + i * 3;
+            const float conf = output_points_h_[base_idx];
+            const float x = output_points_h_[base_idx + 1];
+            const float y = output_points_h_[base_idx + 2];
+            
+            if (conf > point_thresh_) { // 置信度阈值过滤
+                batch_points.push_back({conf, x, y});
+            }
+        }
+        // 应用NMS（需实现）
+        auto nms_points = applyNMS(batch_points, nms_thresh_);
+        output_points.push_back(nms_points);
     }
     
-    // 处理槽位预测 - 修复索引
+    // 解析车位输出 (shape: [batch, max_slots, 5])
     for (int b = 0; b < max_batch_size_; ++b) {
         std::vector<ParkingSlot> batch_slots;
         for (int i = 0; i < max_slots_; ++i) {
-            size_t offset = b * max_slots_ * 5 + i * 5;
-            float conf = output_slots_h_[offset];
-            if (conf > 0.1f) {
-                ParkingSlot slot;
-                slot.confidence = conf;
-                slot.coords[0] = output_slots_h_[offset + 1]; // x1
-                slot.coords[1] = output_slots_h_[offset + 2]; // y1
-                slot.coords[2] = output_slots_h_[offset + 3]; // x2
-                slot.coords[3] = output_slots_h_[offset + 4]; // y2 - 修复索引
-                batch_slots.push_back(slot);
+            const int base_idx = b * max_slots_ * 5 + i * 5;
+            const float conf = output_slots_h_[base_idx];
+            const float x1 = output_slots_h_[base_idx + 1];
+            const float y1 = output_slots_h_[base_idx + 2];
+            const float x2 = output_slots_h_[base_idx + 3];
+            const float y2 = output_slots_h_[base_idx + 4];
+            
+            if (conf > slot_thresh_) { // 车位置信度阈值
+                batch_slots.push_back({conf, {x1, y1, x2, y2}});
             }
         }
         output_slots.push_back(batch_slots);
@@ -355,7 +393,7 @@ void PsDet::postprocess(std::vector<std::vector<float>>& output_points,
 
 // 执行推理
 bool PsDet::infer(const cv::Mat& image, 
-                  std::vector<std::vector<float>>& output_points, 
+                  std::vector<std::vector<KeyPoint>>& output_points, 
                   std::vector<std::vector<ParkingSlot>>& output_slots) {
     if (!engine_ || !context_) return false;
     
@@ -393,6 +431,122 @@ bool PsDet::infer(const cv::Mat& image,
     postprocess(output_points, output_slots);
     
     return true;
+}
+
+void PsDet::visualizeResults(cv::Mat& image,
+                            const std::vector<std::vector<KeyPoint>>& points,
+                            const std::vector<std::vector<ParkingSlot>>& slots) 
+{
+    const int width = image.cols;
+    const int height = image.rows;
+    
+    // 距离阈值常量
+    constexpr float VSLOT_MIN_DIST = 0.04477f;
+    constexpr float VSLOT_MAX_DIST = 0.10994f;
+    constexpr float SHORT_SEP_LEN = 0.19952f;
+    constexpr float LONG_SEP_LEN = 0.46875f;
+    
+    // 1. 绘制停车位
+    for (const auto& batch_slots : slots) {
+        for (const auto& slot : batch_slots) {
+            // 坐标转换：归一化→像素
+            cv::Point2f p0(
+                width * slot.coords[0] - 0.5f,
+                height * slot.coords[1] - 0.5f
+            );
+            cv::Point2f p1(
+                width * slot.coords[2] - 0.5f,
+                height * slot.coords[3] - 0.5f
+            );
+            
+            // 计算方向向量
+            cv::Point2f vec = p1 - p0;
+            float length = std::sqrt(vec.x*vec.x + vec.y*vec.y);
+            cv::Point2f unit_vec = (length > 0) ? vec / length : cv::Point2f(1, 0);
+            
+            // 确定分隔线长度
+            float dist_sq = (slot.coords[0] - slot.coords[2])*(slot.coords[0] - slot.coords[2]) + 
+                           (slot.coords[1] - slot.coords[3])*(slot.coords[1] - slot.coords[3]);
+            
+            float sep_length = (VSLOT_MIN_DIST <= dist_sq && dist_sq <= VSLOT_MAX_DIST)
+                             ? LONG_SEP_LEN : SHORT_SEP_LEN;
+            
+            // 计算垂直方向延伸点
+            cv::Point2f perpendicular(-unit_vec.y, unit_vec.x);
+            cv::Point2f p2 = p0 + perpendicular * sep_length * height;
+            cv::Point2f p3 = p1 + perpendicular * sep_length * height;
+            
+            // 坐标取整
+            cv::Point ip0(static_cast<int>(std::round(p0.x)), 
+                         static_cast<int>(std::round(p0.y)));
+            cv::Point ip1(static_cast<int>(std::round(p1.x)), 
+                         static_cast<int>(std::round(p1.y)));
+            cv::Point ip2(static_cast<int>(std::round(p2.x)), 
+                         static_cast<int>(std::round(p2.y)));
+            cv::Point ip3(static_cast<int>(std::round(p3.x)), 
+                         static_cast<int>(std::round(p3.y)));
+            
+            // 绘制车位线
+            cv::line(image, ip0, ip1, cv::Scalar(0, 0, 255), 2);  // 主方向线（红色）
+            cv::line(image, ip0, ip2, cv::Scalar(0, 255, 0), 2);  // 左侧分隔线（绿色）
+            cv::line(image, ip1, ip3, cv::Scalar(0, 255, 0), 2);  // 右侧分隔线（绿色）
+            
+            // 绘制端点
+            cv::circle(image, ip0, 5, cv::Scalar(255, 0, 0), -1); // 起点（蓝色）
+            cv::circle(image, ip1, 5, cv::Scalar(0, 255, 255), -1); // 终点（黄色）
+            
+            // 显示置信度
+            std::string conf_text = cv::format("%.2f", slot.confidence);
+            cv::putText(image, conf_text, 
+                       cv::Point((ip0.x + ip1.x)/2, (ip0.y + ip1.y)/2),
+                       cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 2);
+        }
+    }
+    
+    // 2. 绘制关键点（按批次不同颜色）
+    const cv::Scalar colors[] = {
+        cv::Scalar(0, 255, 255), // 黄色
+        cv::Scalar(0, 255, 0),   // 绿色
+        cv::Scalar(255, 0, 255), // 紫色
+        cv::Scalar(0, 165, 255)  // 橙色
+    };
+    
+    for (size_t batch = 0; batch < points.size(); ++batch) {
+        const auto& batch_points = points[batch];
+        cv::Scalar color = colors[batch % 4];
+        
+        for (size_t i = 0; i < batch_points.size(); i += 3) {
+            const auto& kp = batch_points[i]; // 获取KeyPoint对象
+            float conf = kp.conf;             // 直接访问成员变量
+            float x = kp.x * width;           // 使用归一化坐标转换
+            float y = kp.y * height;
+            
+            cv::Point pt(static_cast<int>(x), static_cast<int>(y));
+            
+            // 绘制实心点+黑边
+            cv::circle(image, pt, 6, cv::Scalar(0, 0, 0), 2); // 黑边
+            cv::circle(image, pt, 4, color, -1); // 彩色填充
+            
+            // 高置信度点添加文本
+            if (conf > 0.3) {
+                std::string label = cv::format("%.1f", conf);
+                cv::putText(image, label, pt + cv::Point(-15, -15), 
+                           cv::FONT_HERSHEY_SIMPLEX, 0.5, 
+                           cv::Scalar(255, 255, 255), 2);
+            }
+        }
+    }
+    
+    // 3. 添加统计信息
+    int total_points = 0;
+    for (auto& batch : points) total_points += batch.size() / 3;
+    
+    int total_slots = 0;
+    for (auto& batch : slots) total_slots += batch.size();
+    
+    std::string stats = cv::format("Points: %d | Slots: %d", total_points, total_slots);
+    cv::putText(image, stats, cv::Point(10, 30), 
+               cv::FONT_HERSHEY_DUPLEX, 0.8, cv::Scalar(0, 0, 255), 2);
 }
 
 cv::Size PsDet::getInputSize() const {

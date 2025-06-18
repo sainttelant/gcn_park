@@ -1,23 +1,14 @@
 {
     "version": "0.2.0",
     "configurations": [
-        
         {
-            "name": "Python: Run demo.py",
-            "type": "python",
+            "name": "Run psdet_demo",
+            "type": "cppdbg",
             "request": "launch",
-            //"program": "${workspaceFolder}/tools/demo.py",
-            //"args": ["-c", "config/ps_gat.yaml", "-m", "checkpoint_epoch_200.pth"],
-            //"program": "${workspaceFolder}/tools/train.py",
-            //"args": ["-c", "config/ps_gat.yaml"],
-            //"program": "${workspaceFolder}/tools/export_onnx.py",
-            "program": "${workspaceFolder}/tools/exportOnnx.py",
-            "args": ["-c", "config/ps_gat.yaml", "-m", "checkpoint_epoch_200.pth"],
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "console": "integratedTerminal",
-            "pythonPath": "/root/anaconda3/envs/gcn_slots/bin/python"
+            "program": "${workspaceFolder}/src/bin/psdet_demo",
+            "preLaunchTask": "cmake",
+            "miDebuggerPath": "/usr/bin/gdb",
+            "cwd": "${workspaceFolder}/src/build"
         }
     ]
 }

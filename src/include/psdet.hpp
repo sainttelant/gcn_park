@@ -28,6 +28,11 @@ private:
     Severity severity;
 };
 
+struct KeyPoint {
+    float conf; // 置信度
+    float x, y; // 归一化坐标[0,1]
+};
+
 struct ParkingSlot {
     float confidence;
     float coords[4]; // x1, y1, x2, y2
@@ -50,10 +55,15 @@ public:
     void save();
     
     bool infer(const cv::Mat& image, 
-               std::vector<std::vector<float>>& output_points, 
+               std::vector<std::vector<KeyPoint>>& output_points, 
                std::vector<std::vector<ParkingSlot>>& output_slots);
     
     cv::Size getInputSize() const;
+    
+     void visualizeResults(cv::Mat& image,
+                         const std::vector<std::vector<KeyPoint>>& points,
+                         const std::vector<std::vector<ParkingSlot>>& slots);
+    
 
 private:
     Logger logger_;
@@ -79,10 +89,20 @@ private:
     std::vector<float> output_points_h_;
     std::vector<float> output_slots_h_;
 
+    float point_thresh_ = 0.008f;
+    float slot_thresh_ = 0.05f;
+    float nms_thresh_ = 0.0625f;    
+
+
     void preprocess(const cv::Mat& image, float* input);
-    void postprocess(std::vector<std::vector<float>>& output_points, 
+    void postprocess(std::vector<std::vector<KeyPoint>>& output_points,
                      std::vector<std::vector<ParkingSlot>>& output_slots);
     
+    // NMS函数
+    std::vector<KeyPoint> applyNMS(
+    const std::vector<KeyPoint>& points, 
+    float dist_thresh= 0.0625f
+    );
     bool initBuffers();
     void destroyBuffers();
     

@@ -71,7 +71,8 @@ def main():
     model = build_model(cfg.model)
     logger.info(model)
     
-    image_dir = Path(cfg.data_root) / 'testing' / 'outdoor-normal daylight'
+    #image_dir = Path(cfg.data_root) / 'testing' / 'outdoor-normal daylight'
+    image_dir = Path("images")
     display = False
 
     # load checkpoint
@@ -97,6 +98,23 @@ def main():
 
             start_time = time.time()
             pred_dicts, ret_dict = model(data_dict)
+            # ret_dict is empty
+            print("pred_dicts  lens:", len(pred_dicts['points_pred']))
+            print("slots predicts  lens:",  len(pred_dicts['slots_pred']))
+            #save the results of pred_dicts and ret_dict as txt files, if no txt file, it will be created
+            # everytime clean the txt files
+            savefolder =Path(image_dir) / 'predictions'
+            with open(savefolder / ('%s_pred_dicts.txt' % img_name), 'w') as f:
+                # write the results of pred_dicts['points_pred'] to the txt file
+                for i in range(len(pred_dicts['points_pred'])):           
+                    for j in range(len(pred_dicts['points_pred'][i])):
+                        f.write(str(pred_dicts['points_pred'][i][j]) + '\n')
+            with open(savefolder / ('%s_slots_pred.txt' % img_name), 'w') as f:
+                for i in range(len(pred_dicts['slots_pred'])):
+                    for j in range(len(pred_dicts['slots_pred'][i])):
+                        f.write(str(pred_dicts['slots_pred'][i][j]) + '\n')
+                
+          
             sec_per_example = (time.time() - start_time)
             print('Info speed: %.4f second per example.' % sec_per_example)
 
