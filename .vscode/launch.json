@@ -8,7 +8,7 @@
             "program": "${workspaceFolder}/src/bin/psdet_demo",
             "preLaunchTask": "cmake",
             "miDebuggerPath": "/usr/bin/gdb",
-            "cwd": "${workspaceFolder}/src/build"
+            "cwd": "${workspaceFolder}"
         }
     ]
 }

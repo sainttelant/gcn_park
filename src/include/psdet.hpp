@@ -60,7 +60,7 @@ public:
     
     cv::Size getInputSize() const;
     
-     void visualizeResults(cv::Mat& image,
+     void visualizeResults(cv::Mat & car,cv::Mat& image,
                          const std::vector<std::vector<KeyPoint>>& points,
                          const std::vector<std::vector<ParkingSlot>>& slots);
     

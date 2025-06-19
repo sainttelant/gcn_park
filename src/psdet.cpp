@@ -427,19 +427,84 @@ bool PsDet::infer(const cv::Mat& image,
                    output_slots_h_.size() * sizeof(float), 
                    cudaMemcpyDeviceToHost, stream_);
     
+    // 等待完成
+    cudaStreamSynchronize(stream_);
+    
+    // write output_points_h_ and output_slots_h_ to txtfile 
+    std::ofstream output_points_file("images/predictions/output_points_orig.txt"), output_slots_file("images/predictions/output_slots_orig.txt");
+    for (const auto& point : output_points_h_) {
+        // 每存储一个就空行
+        output_points_file << std::endl;
+        output_points_file << std::fixed << std::setprecision(9) << point << " ";
+    }
+
+    output_points_file << std::endl;
+    for (const auto& slot : output_slots_h_) {
+        // 每存储一个就空行
+        output_slots_file << std::endl;
+        output_slots_file << std::fixed << std::setprecision(9) << slot << " ";
+    }
+    output_slots_file << std::endl;
+    output_points_file.close();
+    output_slots_file.close();
+    
+    // 检查CUDA错误
+    cudaError_t error = cudaGetLastError();
+    if (error != cudaSuccess) {
+        std::cerr << "CUDA error: " << cudaGetErrorString(error) << std::endl;
+        return false;
+    }
+
+
+
+
     cudaStreamSynchronize(stream_);
     postprocess(output_points, output_slots);
     
     return true;
 }
 
-void PsDet::visualizeResults(cv::Mat& image,
+void PsDet::visualizeResults(cv::Mat & car,cv::Mat& image,
                             const std::vector<std::vector<KeyPoint>>& points,
                             const std::vector<std::vector<ParkingSlot>>& slots) 
 {
     const int width = image.cols;
     const int height = image.rows;
+
+    // resize the image to (input_width, input_height)
+    cv::resize(image, image, cv::Size(input_width_, input_height_));
+
+    cv::resize(car, car, cv::Size(input_width_, input_height_));
+    // 设置指定区域为黑色
+    cv::Rect roi(210, 145, 90, 220);
+
+    roi.x = std::max(roi.x, 0);
+    roi.y = std::max(roi.y, 0);
+    roi.width = std::min(roi.width, image.cols - roi.x);
+    roi.height = std::min(roi.height, image.rows - roi.y);
+
+    // 将指定区域设置为0
+    image(roi) = cv::Scalar(0, 0, 0);
+
+    // 确保 roi 的大小与 car 图像的大小相同
+    cv::resize(car, car, cv::Size(roi.width, roi.height));
     
+   
+    // 将 car 复制到 image 的指定区域
+    cv::Mat image_roi = image(roi);
+    if (car.channels() == 4 && image_roi.channels() == 3) {
+        // 如果 car 是RGBA图像，将其转换为RGB图像
+        cv::cvtColor(car, car, cv::COLOR_RGBA2RGB);
+    }
+    // 确保 car 和 image_roi 的大小相同
+    if (car.size() == image_roi.size()) {
+        cv::addWeighted(image_roi, 1.0, car, 1.0, 0.0, image_roi);
+    } else {
+        std::cerr << "Error: Sizes of car and image_roi do not match." << std::endl;
+    }
+
+ 
+
     // 距离阈值常量
     constexpr float VSLOT_MIN_DIST = 0.04477f;
     constexpr float VSLOT_MAX_DIST = 0.10994f;
