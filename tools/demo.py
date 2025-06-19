@@ -99,6 +99,7 @@ def main():
             start_time = time.time()
             pred_dicts, ret_dict = model(data_dict)
             # ret_dict is empty
+            """
             print("pred_dicts  lens:", len(pred_dicts['points_pred']))
             print("slots predicts  lens:",  len(pred_dicts['slots_pred']))
             #save the results of pred_dicts and ret_dict as txt files, if no txt file, it will be created
@@ -114,7 +115,7 @@ def main():
                     for j in range(len(pred_dicts['slots_pred'][i])):
                         f.write(str(pred_dicts['slots_pred'][i][j]) + '\n')
                 
-          
+            """
             sec_per_example = (time.time() - start_time)
             print('Info speed: %.4f second per example.' % sec_per_example)
 

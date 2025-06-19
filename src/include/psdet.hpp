@@ -14,9 +14,10 @@ namespace psdet {
 
 using namespace nvinfer1;
 
-class Logger : public ILogger {
+class Logger : public ILogger 
+{
 public:
-    explicit Logger(Severity severity = Severity::kWARNING) : severity(severity) {}
+    explicit Logger(Severity severity = Severity::kINFO) : severity(severity) {}
     
     void log(Severity severity, const char* msg) noexcept override {
         if (severity <= this->severity) {

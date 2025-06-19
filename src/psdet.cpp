@@ -160,6 +160,26 @@ bool PsDet::build(bool fp16) {
         return false;
     }
 
+    // 1. 打印所有输入张量信息（支持多输入）
+        int num_inputs = network->getNbInputs();
+        logger_.log(ILogger::Severity::kINFO, 
+                    ("Network has " + std::to_string(num_inputs) + " inputs").c_str());
+
+        for (int idx = 0; idx < num_inputs; ++idx) {
+            ITensor* input_tensor = network->getInput(idx);
+            const char* tensor_name = input_tensor->getName();
+            Dims dims = input_tensor->getDimensions();
+
+            // 构建详细维度描述字符串
+            std::string dim_str = "Input[" + std::to_string(idx) + "]: " + tensor_name + " : [";
+            for (int d = 0; d < dims.nbDims; ++d) {
+                dim_str += (dims.d[d] == -1) ? "?" : std::to_string(dims.d[d]); // 动态维度显示为?
+                if (d < dims.nbDims - 1) dim_str += ", ";
+            }
+            dim_str += "]";
+            logger_.log(ILogger::Severity::kINFO, dim_str.c_str());
+        }
+
     // 确保通道维度有效
     const int channels = input_dims.d[1] > 0 ? input_dims.d[1] : 3;
     if (channels != 1 && channels != 3) {
@@ -185,6 +205,9 @@ bool PsDet::build(bool fp16) {
     logger_.log(ILogger::Severity::kINFO, ("  MAX shape: " + dimsToString(max_dims)).c_str());
 
     // 应用优化配置
+
+
+
     profile->setDimensions(input_name, OptProfileSelector::kMIN, min_dims);
     profile->setDimensions(input_name, OptProfileSelector::kOPT, opt_dims);
     profile->setDimensions(input_name, OptProfileSelector::kMAX, max_dims);
@@ -408,7 +431,7 @@ bool PsDet::infer(const cv::Mat& image,
     // 设置绑定
     void* bindings[] = {input_d_, output_points_d_, output_slots_d_};
     
-    // 动态维度设置[6](@ref)
+    // 使用动态
     if (engine_->hasImplicitBatchDimension() == false) {
         Dims4 input_dims{1, input_channels_, input_height_, input_width_};
         context_->setBindingDimensions(0, input_dims);
@@ -429,9 +452,25 @@ bool PsDet::infer(const cv::Mat& image,
     
     // 等待完成
     cudaStreamSynchronize(stream_);
+
+    // 在执行推理后添加 for debug comparison with pth demo.py
+    Dims points_dims = context_->getBindingDimensions(1); // points输出索引
+    Dims slots_dims = context_->getBindingDimensions(2);  // slots输出索引
+    std::cout << ">Points output dims: ";
+    for (int i = 0; i < points_dims.nbDims; ++i) 
+        std::cout << points_dims.d[i] << " ";
+    std::cout << "\nSlots output dims: ";
+    for (int i = 0; i < slots_dims.nbDims; ++i)
+        std::cout << slots_dims.d[i] << " ";
+
+    // 在保存输出文件前添加
+    float sum_points = std::accumulate(output_points_h_.begin(), output_points_h_.end(), 0.0f);
+    float sum_slots = std::accumulate(output_slots_h_.begin(), output_slots_h_.end(), 0.0f);
+    std::cout << "Points输出总和: " << sum_points << " | Slots输出总和: " << sum_slots;
     
     // write output_points_h_ and output_slots_h_ to txtfile 
-    std::ofstream output_points_file("images/predictions/output_points_orig.txt"), output_slots_file("images/predictions/output_slots_orig.txt");
+    std::ofstream output_points_file("images/predictions/output_points_orig.txt"), \
+    output_slots_file("images/predictions/output_slots_orig.txt");
     for (const auto& point : output_points_h_) {
         // 每存储一个就空行
         output_points_file << std::endl;

@@ -9,6 +9,7 @@ from psdet.utils.common import get_logger
 from psdet.models.builder import build_model
 from pathlib import Path
 import onnxruntime 
+from torchsummary import summary
 
 def export_model_to_onnx(model, cfg, device_id=0):
     # 设置使用的设备
@@ -74,7 +75,7 @@ def export_model_to_onnx(model, cfg, device_id=0):
     # 包装模型并移动到设备
     wrapped_model = ModelWrapper(model).to(device)
     wrapped_model.eval()
-
+    
     # 在导出前测试一次前向传播
     with torch.no_grad():
         points_pred, descriptor_map = wrapped_model(image_tensor)
@@ -223,7 +224,7 @@ if __name__ == '__main__':
     model = build_model(cfg.model)
     logger.info(model)
     model.load_params_from_file(filename=cfg.ckpt, logger=logger, to_cpu=False)
-    
+
     device = torch.device('cuda:0')
     model.to(device)
 
