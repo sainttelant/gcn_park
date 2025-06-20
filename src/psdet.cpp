@@ -240,6 +240,18 @@ bool PsDet::build(bool fp16) {
         builder->destroy();
         return false;
     }
+
+    for (int i = 0; i < engine->getNbBindings(); ++i) {
+        Dims dims = engine->getBindingDimensions(i);
+        std::string type = (engine->bindingIsInput(i)) ? "Input" : "Output";
+        std::cout << type << "[" << i << "] : ";
+        for (int d = 0; d < dims.nbDims; ++d) {
+            std::cout << (dims.d[d] == -1 ? "?" : std::to_string(dims.d[d])) << " ";
+        }
+        std::cout << std::endl;
+    }
+
+
      printf("before serializing engine <<<<<<<<<<<<<<<<<<<\n");
     // 8. 序列化引擎
     IHostMemory* serialized_engine = engine->serialize();

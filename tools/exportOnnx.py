@@ -75,7 +75,7 @@ def export_model_to_onnx(model, cfg, device_id=0):
     # 包装模型并移动到设备
     wrapped_model = ModelWrapper(model).to(device)
     wrapped_model.eval()
-    
+
     # 在导出前测试一次前向传播
     with torch.no_grad():
         points_pred, descriptor_map = wrapped_model(image_tensor)
@@ -141,6 +141,8 @@ def export_model_to_onnx(model, cfg, device_id=0):
     except Exception as e:
         print(f"模型简化失败: {e}")
     
+   
+    
     # 验证 ONNX 模型    
     validation_result = validate_onnx_model(wrapped_model, image_tensor, onnx_model_path)
     if validation_result:
@@ -171,6 +173,13 @@ def validate_onnx_model(wrapped_model, image_tensor, onnx_model_path):
     # 4. 运行PyTorch原始模型推理
     with torch.no_grad():
         torch_points, torch_desc = wrapped_model(image_tensor)
+        
+        print("PyTorch points总和:", torch_points.sum().item())
+        print("PyTorch points统计: 总和={:.4f}, 最大={:.4f}, 最小={:.4f}".format(
+            torch_points.sum().item(),
+            torch_points.max().item(),
+            torch_points.min().item()
+        ))
         # 确保输出为张量以便比较
         if not isinstance(torch_points, torch.Tensor):
             torch_points = torch.tensor(torch_points).to(image_tensor.device)

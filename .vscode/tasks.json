@@ -5,7 +5,7 @@
             "label": "cmake",
             "type": "shell",
             "command": "cmake",
-            "args": ["--build", "${workspaceFolder}/src/build"],
+            "args": ["--build", "${workspaceFolder}/src/build", "--","-j8"],
             "group": {
                 "kind": "build",
                 "isDefault": true

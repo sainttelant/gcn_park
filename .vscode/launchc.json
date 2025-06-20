@@ -1,0 +1,14 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run psdet_demo",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/bin/psdet_demo",
+            "preLaunchTask": "cmake",
+            "miDebuggerPath": "/usr/bin/gdb",
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

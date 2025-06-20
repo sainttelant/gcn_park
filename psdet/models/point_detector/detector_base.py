@@ -61,10 +61,14 @@ class PointDetectorBase(nn.Module):
             # saving data_dict as txt file 
             import numpy as np
             
+          
+            
             points_pred_2d = data_dict['points_pred'].cpu().detach().numpy().astype(np.float32).reshape(-1,3*16*16)
+            print("the sum of points_pred_2d:", points_pred_2d.sum())
             np.savetxt('images/predictions/points_pred_python.txt', points_pred_2d)
             
             descriptor_map = data_dict['descriptor_map'].cpu().detach().numpy().astype(np.float32).reshape(-1,128*16*16)
+            print("the sum of descriptor_map:", descriptor_map.sum())
             np.savetxt('images/predictions/descriptor_map_python.txt', descriptor_map)
 
             pred_dicts, ret_dicts = self.post_processing(data_dict)
