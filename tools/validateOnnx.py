@@ -132,14 +132,8 @@ def validate_onnx_model(onnx_path, image_dir):
             'points_pred': [torch.from_numpy(outputs[0])],  # 假设第一个输出是points_pred
             'slots_pred': [torch.from_numpy(outputs[1])]    # 假设第二个输出是slots_pred
         }
-
-        # 使用原始可视化函数验证结果
-        result_image = draw(image0.copy(), pred_dicts)
         
-        # 保存对比结果
-        save_dir = Path(image_dir) / 'onnx_predictions'
-        save_dir.mkdir(exist_ok=True)
-        cv2.imwrite(str(save_dir / f'{img_path.stem}_onnx.jpg'), result_image)
+        
 
         ##############################
         # 精度验证关键步骤（新增）
@@ -148,7 +142,10 @@ def validate_onnx_model(onnx_path, image_dir):
         print("ONNX points_pred统计: 总和={:.4f}, 最大={:.4f}, 最小={:.4f}".format(
             outputs[0].sum(), outputs[0].max(), outputs[0].min()
         ))
+        print("ONNX slots_pred统计: 总和={:.4f}, 最大={:.4f}, 最小={:.4f}".format(
+            outputs[1].sum(), outputs[1].max(), outputs[1].min()))
         
+        save_dir = Path("images")/'predictions'
         # 2. 保存原始数据（与PyTorch输出对比）
         np.savetxt(save_dir / f'{img_path.stem}_points_onnx.txt', outputs[0].ravel())
         np.savetxt(save_dir / f'{img_path.stem}_slots_onnx.txt', outputs[1].ravel())

@@ -220,7 +220,9 @@ bool PsDet::build(bool fp16) {
         logger_.log(ILogger::Severity::kINFO, "FP16 mode enabled");
     } else {
         logger_.log(ILogger::Severity::kINFO, "Using FP32 precision");
-    }
+    } 
+
+    
 
     // 7. 构建引擎（增加详细日志）
     printf("Building engine... (this may take several minutes) \n");
@@ -445,6 +447,7 @@ bool PsDet::infer(const cv::Mat& image,
     
     // 使用动态
     if (engine_->hasImplicitBatchDimension() == false) {
+        std::cout << "引擎支持显式批处理" << std::endl;
         Dims4 input_dims{1, input_channels_, input_height_, input_width_};
         context_->setBindingDimensions(0, input_dims);
     }
@@ -466,6 +469,10 @@ bool PsDet::infer(const cv::Mat& image,
     cudaStreamSynchronize(stream_);
 
     // 在执行推理后添加 for debug comparison with pth demo.py
+    const Dims opt_dims = context_->getBindingDimensions(0);
+    std::cout << "real inference Dims: ";
+    for (int i=0; i<opt_dims.nbDims; ++i) 
+    std::cout << opt_dims.d[i] << " ";
     Dims points_dims = context_->getBindingDimensions(1); // points输出索引
     Dims slots_dims = context_->getBindingDimensions(2);  // slots输出索引
     std::cout << ">Points output dims: ";

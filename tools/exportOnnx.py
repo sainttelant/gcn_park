@@ -11,6 +11,10 @@ from pathlib import Path
 import onnxruntime 
 from torchsummary import summary
 
+import tensorrt as trt
+import pycuda.driver as cuda
+import pycuda.autoinit
+
 def export_model_to_onnx(model, cfg, device_id=0):
     # 设置使用的设备
     device = torch.device(f'cuda:{device_id}')
@@ -149,6 +153,13 @@ def export_model_to_onnx(model, cfg, device_id=0):
         print("\n[🎉] ONNX模型验证成功！与原模型完全一致")
     else:
         print("\n[⚠️] 警告：ONNX模型输出与原始模型存在差异")
+    
+    # 新增TensorRT验证
+    if validation_result: 
+        trt_result = validate_tensorrt_model(
+             onnx_model_path/"model_simplified.onnx",image_tensor
+        )
+        print(f"\n[🔍] TensorRT验证结果: {'通过' if trt_result else '失败'}")
    
 def validate_onnx_model(wrapped_model, image_tensor, onnx_model_path):
     # 1. 加载ONNX模型并验证基础结构
@@ -224,6 +235,133 @@ def validate_onnx_model(wrapped_model, image_tensor, onnx_model_path):
             passed = False
     
     return passed    
+
+import tensorrt as trt
+import pycuda.driver as cuda
+import pycuda.autoinit
+import numpy as np
+import os
+
+def validate_tensorrt_model(onnx_model_path: str, input_tensor: np.ndarray) -> None:
+    """验证TensorRT引擎的推理流程（含动态输入支持）
+    
+    Args:
+        onnx_model_path: ONNX模型路径
+        input_tensor: 输入数据（numpy数组）
+    """
+    def preprocess_input(input_tensor: np.ndarray) -> np.ndarray:
+        if isinstance(input_tensor, torch.Tensor):
+            input_tensor = input_tensor.cpu().detach().numpy()
+        return np.ascontiguousarray(input_tensor.astype(np.float32))
+    
+    input_data = preprocess_input(input_tensor)  
+    
+    logger = trt.Logger(trt.Logger.WARNING)  # 启用详细日志便于调试
+    buffers = [None]*3
+    
+    try:
+        # === 1. 构建TensorRT引擎 ===
+        builder = trt.Builder(logger)
+        network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
+        parser = trt.OnnxParser(network, logger)
+        
+        # 解析ONNX模型
+        with open(onnx_model_path, "rb") as f:
+            if not parser.parse(f.read()):
+                for error_idx in range(parser.num_errors):
+                    print(f"ONNX解析错误: {parser.get_error(error_idx)}")
+                return
+
+        # === 2. 动态输入配置（关键） ===
+        config = builder.create_builder_config()
+        config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)  # 1GB显存[2](@ref)
+        
+        profile = builder.create_optimization_profile()
+        input_name = network.get_input(0).name
+        actual_shape = input_tensor.shape  # 当前输入的实际形状
+        
+        # 设置动态范围（固定batch时min=opt=max）
+        """ profile.set_shape(input_name, 
+                         min=actual_shape, 
+                         opt=actual_shape, 
+                         max=actual_shape) """
+        profile.set_shape(input_name, 
+                         min=(1,3,256,256), 
+                         opt=(1,3,512,512), 
+                         max=(1,3,1024,1024))
+        config.add_optimization_profile(profile)
+        
+        # 构建序列化引擎（新版API）[3](@ref)
+        serialized_engine = builder.build_serialized_network(network, config)
+        if serialized_engine is None:
+            print("引擎构建失败！详细日志：")
+            for i in range(logger.num_errors):
+                print(logger.get_error(i))
+            return
+        
+        runtime = trt.Runtime(logger)
+        engine = runtime.deserialize_cuda_engine(serialized_engine)
+        
+        # === 3. 处理输出形状（修复负维度） ===
+        def sanitize_shape(shape: tuple) -> list:
+            """将负维度替换为当前batch size"""
+            return [dim if dim > 0 else actual_shape[0] for dim in shape]
+        
+        output_shapes = [
+            sanitize_shape(engine.get_tensor_shape("points_pred")),  # 输出名称需匹配ONNX
+            sanitize_shape(engine.get_tensor_shape("descriptor_map"))
+        ]
+        # 验证形状有效性
+        assert all(dim > 0 for shape in output_shapes for dim in shape), "输出含非法负维度！"
+        
+        # === 4. 显存分配（类型安全） ===
+        # 输入显存
+        input_nbytes = input_data.nbytes
+        buffers[0] = cuda.mem_alloc(input_nbytes)
+        
+        buffers.append(cuda.mem_alloc(input_nbytes))
+        
+        # 输出显存（显式转换numpy.int64）
+        output_buffers = []
+        for shape in output_shapes:
+            num_elements = int(np.prod(shape))  # 确保转为Python int
+            size_bytes = num_elements * 4  # float32=4字节
+            buf = cuda.mem_alloc(size_bytes)
+            buffers.append(buf)
+            output_buffers.append(buf)
+        
+        # === 5. 执行推理 ===
+        context = engine.create_execution_context()
+        context.set_binding_shape(0, actual_shape)  # 绑定动态输入形状[3](@ref)
+        
+        # 数据传输: Host -> Device
+        cuda.memcpy_htod(buffers[0], input_data.tobytes())
+        # 执行推理
+        bindings = [int(b) for b in buffers if b is not None]
+        context.execute_v2(bindings=bindings)
+        # 数据传输: Device -> Host
+        host_outputs = []
+        for buf in output_buffers:
+            host_out = np.empty(output_shapes[0], dtype=np.float32)  # 示例取第一个输出
+            cuda.memcpy_dtoh(host_out, buf)
+            host_outputs.append(host_out)
+        
+        print(f"推理成功！输出形状: {[out.shape for out in host_outputs]}")
+        output_names = ["points_pred", "descriptor_map"]
+        output_indices = [engine.get_binding_index(name) for name in output_names]
+        assert all(idx != -1 for idx in output_indices), "输出名称未匹配！"
+        
+    except Exception as e:
+        print(f"验证失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
+    finally:
+        # === 6. 显存释放（防止泄漏） ===
+        for buf in buffers:
+            if buf:
+                buf.free()
+        print("显存资源已释放")
     
 if __name__ == '__main__':
     cfg = get_config()

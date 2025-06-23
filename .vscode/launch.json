@@ -10,10 +10,10 @@
             //"args": ["-c", "config/ps_gat.yaml", "-m", "checkpoint_epoch_200.pth"],
             //"program": "${workspaceFolder}/tools/train.py",
             //"args": ["-c", "config/ps_gat.yaml"],
-            //"program": "${workspaceFolder}/tools/exportOnnx.py",
-            //"args": ["-c", "config/ps_gat.yaml", "-m", "checkpoint_epoch_200.pth"],
-            "program": "${workspaceFolder}/tools/validateOnnx.py",
+            "program": "${workspaceFolder}/tools/CompareThreeNew.py",
             "args": ["-c", "config/ps_gat.yaml", "-m", "checkpoint_epoch_200.pth"],
+            //"program": "${workspaceFolder}/tools/validateOnnx.py",
+            //"args": ["-c", "config/ps_gat.yaml", "-m", "checkpoint_epoch_200.pth"],
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
             },

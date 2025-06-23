@@ -44,14 +44,14 @@ public:
     PsDet(const std::string& onnx_path, 
           const std::string& engine_path,
           int max_batch_size = 1,
-          int max_points = 100,
-          int max_slots = 50,
+          int max_points = 50000,
+          int max_slots = 50000,
           int input_width = 512,
           int input_height = 512);
 
     ~PsDet();
     
-    bool build(bool fp16 = true);
+    bool build(bool fp16 = false);
     bool load();
     void save();
     

@@ -98,6 +98,7 @@ int main() {
     // 配置参数
     const std::string onnx_path = "/workspace/APA/gcn-parking-slot/cache/ps_gat/100/output_onnx/model_simplified.onnx";
     const std::string engine_path = "cache/ps_gat/100/output_onnx/new.engine";
+    //const std::string engine_path = "new.engine";
     const int input_width = 512;
     const int input_height = 512;
     const int max_points = 100;
