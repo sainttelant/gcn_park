@@ -78,6 +78,8 @@ private:
     int max_batch_size_;
     int max_points_;
     int max_slots_;
+    int points_3d_dim_ = 16;
+    int points_4d_dim_ = 16;
     int input_width_;
     int input_height_;
     int input_channels_ = 3;

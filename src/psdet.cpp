@@ -21,8 +21,8 @@ PsDet::PsDet(const std::string& onnx_path,
       input_height_(input_height) {
     
     input_h_.resize(max_batch_size_ * input_channels_ * input_height_ * input_width_);
-    output_points_h_.resize(max_batch_size_ * max_points_ * 3);
-    output_slots_h_.resize(max_batch_size_ * max_slots_ * 5);
+    output_points_h_.resize(max_batch_size_ *3* points_3d_dim_ * points_4d_dim_);
+    output_slots_h_.resize(max_batch_size_ *128* points_3d_dim_ * points_4d_dim_);
 }
 
 // 析构函数 - 修复销毁顺序[8](@ref)
@@ -189,6 +189,8 @@ bool PsDet::build(bool fp16) {
     }
 
     // 设置优化范围（使用用户配置的尺寸）
+    if (0)
+    {
     const Dims min_dims = Dims4{1, channels, input_height_ / 2, input_width_ / 2};
     const Dims opt_dims = Dims4{max_batch_size_, channels, input_height_, input_width_};
     const Dims max_dims = Dims4{max_batch_size_, channels, input_height_ * 2, input_width_ * 2};
@@ -205,13 +207,20 @@ bool PsDet::build(bool fp16) {
     logger_.log(ILogger::Severity::kINFO, ("  MAX shape: " + dimsToString(max_dims)).c_str());
 
     // 应用优化配置
-
-
-
     profile->setDimensions(input_name, OptProfileSelector::kMIN, min_dims);
     profile->setDimensions(input_name, OptProfileSelector::kOPT, opt_dims);
     profile->setDimensions(input_name, OptProfileSelector::kMAX, max_dims);
     config->addOptimizationProfile(profile);
+    }
+    else
+    {
+        // fixed shape
+        nvinfer1::ITensor* input = network->getInput(0);
+        input->setDimensions(nvinfer1::Dims4(1, 3, 512, 512));
+    }
+
+
+
     config->setMemoryPoolLimit(MemoryPoolType::kWORKSPACE, 1 << 30); // 1GB
 
     // 6. 设置计算精度
@@ -487,8 +496,8 @@ bool PsDet::infer(const cv::Mat& image,
     float sum_slots = std::accumulate(output_slots_h_.begin(), output_slots_h_.end(), 0.0f);
     std::cout << "Points输出总和: " << sum_points << " | Slots输出总和: " << sum_slots;
     
-    // write output_points_h_ and output_slots_h_ to txtfile 
-    std::ofstream output_points_file("images/predictions/output_points_orig.txt"), \
+   
+   /*  std::ofstream output_points_file("images/predictions/output_points_orig.txt"), \
     output_slots_file("images/predictions/output_slots_orig.txt");
     for (const auto& point : output_points_h_) {
         // 每存储一个就空行
@@ -504,7 +513,7 @@ bool PsDet::infer(const cv::Mat& image,
     }
     output_slots_file << std::endl;
     output_points_file.close();
-    output_slots_file.close();
+    output_slots_file.close(); */
     
     // 检查CUDA错误
     cudaError_t error = cudaGetLastError();
@@ -512,12 +521,16 @@ bool PsDet::infer(const cv::Mat& image,
         std::cerr << "CUDA error: " << cudaGetErrorString(error) << std::endl;
         return false;
     }
-
-
-
-
     cudaStreamSynchronize(stream_);
-    postprocess(output_points, output_slots);
+
+
+    // 应该将output_points_h_，output_slots_h_分别转换成（3,16,16) 和 （128，16，16）的矩阵
+    
+
+
+
+
+    postprocess(output_points_h_, output_slots_h_);
     
     return true;
 }

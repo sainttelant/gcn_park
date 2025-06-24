@@ -48,8 +48,8 @@ model:
 
   point_thresh: 0.008
   boundary_thresh: 0.05
-  export_onnx: true
-  evaluation: false
+  export_onnx: false
+  evaluation: true
   use_gnn: true
  
   graph_encoder:

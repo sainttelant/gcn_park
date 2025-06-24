@@ -6,14 +6,13 @@
             "name": "Python: Run demo.py",
             "type": "python",
             "request": "launch",
-            //"program": "${workspaceFolder}/tools/demo.py",
-            //"args": ["-c", "config/ps_gat.yaml", "-m", "checkpoint_epoch_200.pth"],
+            "program": "${workspaceFolder}/tools/demo.py",
+            "args": ["-c", "config/ps_gat.yaml", "-m", "checkpoint_epoch_200.pth"],
             //"program": "${workspaceFolder}/tools/train.py",
             //"args": ["-c", "config/ps_gat.yaml"],
-            "program": "${workspaceFolder}/tools/CompareThreeNew.py",
-            "args": ["-c", "config/ps_gat.yaml", "-m", "checkpoint_epoch_200.pth"],
-            //"program": "${workspaceFolder}/tools/validateOnnx.py",
+            //"program": "${workspaceFolder}/tools/CompareThreeNew.py",
             //"args": ["-c", "config/ps_gat.yaml", "-m", "checkpoint_epoch_200.pth"],
+
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
             },

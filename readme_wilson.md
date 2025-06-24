@@ -27,12 +27,9 @@ python3 tools/export_onnx.py -c config/ps_gat.yaml -m checkpoint_epoch_200.pth
 # convert onnx to tensorrt version , and the tensorrt has been installed with 8.6.1.6 
 # try to using trtexec to convert
 
-trtexec --onnx=cache/ps_gat/100/output_onnx/model_simplified.onnx \
+trtexec --onnx=cache/ps_gat/100/output_onnx/fixed_model.onnx \
         --dumpLayerInfo \
         --saveEngine=cache/ps_gat/100/output_onnx/new.engine \
-        --minShapes=image:1x3x1x1 \
-        --optShapes=image:1x3x512x512 \
-        --maxShapes=image:1x3x1024x1024 \
         --verbose >> trtexec_log.txt
 
 
