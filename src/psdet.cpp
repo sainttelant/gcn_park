@@ -189,7 +189,7 @@ bool PsDet::build(bool fp16) {
     }
 
     // 设置优化范围（使用用户配置的尺寸）
-    if (0)
+    if (1)
     {
     const Dims min_dims = Dims4{1, channels, input_height_ / 2, input_width_ / 2};
     const Dims opt_dims = Dims4{max_batch_size_, channels, input_height_, input_width_};
@@ -530,7 +530,7 @@ bool PsDet::infer(const cv::Mat& image,
 
 
 
-    postprocess(output_points_h_, output_slots_h_);
+    //postprocess(output_points_h_, output_slots_h_);
     
     return true;
 }
