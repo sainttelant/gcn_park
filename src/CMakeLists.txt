@@ -3,6 +3,7 @@ project(ParkingSlotDetection)
 
 set(CMAKE_CXX_STANDARD 17)
 
+set(ARCH 89)  # 设置GPU架构 for ada5000 gpu
 
 set(CMAKE_BUILD_TYPE "Debug")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g")
@@ -26,9 +27,28 @@ set(CUDA_LIB /usr/local/cuda-11.8/targets/x86_64-linux/lib/)
 # 包含TensorRT头文件
 include_directories(${TENSORRT_DIR}
     ${PROJECT_SOURCE_DIR}/include
+    #${PROJECT_SOURCE_DIR}/plugin/grid_sampler
+    ${PROJECT_SOURCE_DIR}/plugin/simpleplugin
+    ${PROJECT_SOURCE_DIR}/common
     ${OpenCV_INCLUDE_DIRS}
     ${CUDA_DIR}
 )
+
+# 编一个cuda的动态库出来 
+
+#file(GLOB Project_ops_src ${PROJECT_SOURCE_DIR}/plugin/simpleplugin/*.cu  ${PROJECT_SOURCE_DIR}/common/*.cu ${PROJECT_SOURCE_DIR}/common/*.cpp ${PROJECT_SOURCE_DIR}/plugin/grid_sampler/*.cu ${PROJECT_SOURCE_DIR}/plugin/grid_sampler/*.cpp ${PROJECT_SOURCE_DIR}/plugin/normalize/*.cu)
+
+file(GLOB Project_ops_src ${PROJECT_SOURCE_DIR}/plugin/simpleplugin/*.cu)
+set(shared_target psdet_ops)
+
+cuda_add_library(${shared_target} SHARED ${Project_ops_src} OPTIONS -arch=sm_${ARCH})
+
+install (
+    TARGETS ${shared_target}
+    LIBRARY DESTINATION lib
+)
+
+
 
 message("TensorRT_DIR: ${TENSORRT_DIR}")
 message("project source dir: ${PROJECT_SOURCE_DIR}")
@@ -49,6 +69,7 @@ target_link_libraries(psdet_demo
     nvinfer
     nvonnxparser
     cudart
+    psdet_ops 
     cuda
 )
 
