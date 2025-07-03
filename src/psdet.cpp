@@ -1,4 +1,5 @@
 #include "psdet.hpp"
+#include "simpleplugin.h"
 #include <algorithm>
 #include <cassert>
 #include <numeric>  // 修复：添加 std::iota 所需的头文件
@@ -358,84 +359,159 @@ void PsDet::preprocess(const cv::Mat& image, float* input) {
     }
 }
 
-std::vector<KeyPoint> PsDet::applyNMS(
-    const std::vector<KeyPoint>& points, 
-    float dist_thresh
-) {
-    std::vector<bool> suppressed(points.size(), false);
-    std::vector<KeyPoint> result;
-    
-    // 按置信度降序排序
-    std::vector<size_t> indices(points.size());
-    std::iota(indices.begin(), indices.end(), 0);
-    std::sort(indices.begin(), indices.end(), [&](size_t i, size_t j) {
-        return points[i].conf > points[j].conf;
-    });
-    
-    // 遍历所有点
-    for (size_t i = 0; i < indices.size(); ++i) {
-        if (suppressed[indices[i]]) continue;
-        result.push_back(points[indices[i]]);
-        
-        // 计算与后续点的距离
-        for (size_t j = i + 1; j < indices.size(); ++j) {
-            if (suppressed[indices[j]]) continue;
-            
-            float dx = points[indices[i]].x - points[indices[j]].x;
-            float dy = points[indices[i]].y - points[indices[j]].y;
-            float dist_sq = dx * dx + dy * dy;
-            
-            if (dist_sq < dist_thresh * dist_thresh) {
-                suppressed[indices[j]] = true;
-            }
-        }
-    }
-    return result;
-}
 
-// 后处理 - 修复索引错误[6](@ref)
-void PsDet::postprocess(std::vector<std::vector<KeyPoint>>& output_points,
-                        std::vector<std::vector<ParkingSlot>>& output_slots) 
-{
-   output_points.clear();
-    output_slots.clear();
+void PsDet::process_points(
+    const float* points_data,
+    std::vector<std::vector<KeyPoint>>& output_points,
+    int batch_size) {
     
-    // 解析关键点输出 (shape: [batch, max_points, 3])
-    for (int b = 0; b < max_batch_size_; ++b) {
+    output_points.clear();
+    output_points.resize(batch_size);
+    
+    for (int b = 0; b < batch_size; ++b) {
         std::vector<KeyPoint> batch_points;
+        
+        // 解析点数据
         for (int i = 0; i < max_points_; ++i) {
             const int base_idx = b * max_points_ * 3 + i * 3;
-            const float conf = output_points_h_[base_idx];
-            const float x = output_points_h_[base_idx + 1];
-            const float y = output_points_h_[base_idx + 2];
+            const float conf = points_data[base_idx];
+            const float x = points_data[base_idx + 1];
+            const float y = points_data[base_idx + 2];
             
-            if (conf > point_thresh_) { // 置信度阈值过滤
+            if (conf > point_thresh_) {
                 batch_points.push_back({conf, x, y});
             }
         }
-        // 应用NMS（需实现）
+        
+        // 应用改进的NMS
         auto nms_points = applyNMS(batch_points, nms_thresh_);
-        output_points.push_back(nms_points);
-    }
-    
-    // 解析车位输出 (shape: [batch, max_slots, 5])
-    for (int b = 0; b < max_batch_size_; ++b) {
-        std::vector<ParkingSlot> batch_slots;
-        for (int i = 0; i < max_slots_; ++i) {
-            const int base_idx = b * max_slots_ * 5 + i * 5;
-            const float conf = output_slots_h_[base_idx];
-            const float x1 = output_slots_h_[base_idx + 1];
-            const float y1 = output_slots_h_[base_idx + 2];
-            const float x2 = output_slots_h_[base_idx + 3];
-            const float y2 = output_slots_h_[base_idx + 4];
-            
-            if (conf > slot_thresh_) { // 车位置信度阈值
-                batch_slots.push_back({conf, {x1, y1, x2, y2}});
-            }
-        }
-        output_slots.push_back(batch_slots);
+        output_points[b] = nms_points;
     }
 }
+
+
+
+void PsDet::process_slots(
+    const float* slots_data,
+    const float* descriptor_map,
+    std::vector<std::vector<ParkingSlot>>& output_slots,
+    int batch_size) {
+    
+    output_slots.clear();
+    output_slots.resize(batch_size);
+    
+    // 假设描述符图的尺寸
+    const int desc_channels = 128;
+    const int desc_height = input_height_ / 4;
+    const int desc_width = input_width_ / 4;
+    
+    // 为每个批次处理槽位
+    for (int b = 0; b < batch_size; ++b) {
+        std::vector<ParkingSlot> batch_slots;
+        
+        // 解析槽位数据
+        for (int i = 0; i < max_slots_; ++i) {
+            const int base_idx = b * max_slots_ * 5 + i * 5;
+            const float conf = slots_data[base_idx];
+            const float x1 = slots_data[base_idx + 1];
+            const float y1 = slots_data[base_idx + 2];
+            const float x2 = slots_data[base_idx + 3];
+            const float y2 = slots_data[base_idx + 4];
+            
+            if (conf > slot_thresh_) {
+                // 创建归一化的网格点用于采样
+                std::vector<float> grid_points = {
+                    x1 * 2 - 1, y1 * 2 - 1,
+                    x2 * 2 - 1, y2 * 2 - 1
+                };
+                
+                // 在GPU上采样描述符
+                float* sampled_descriptors;
+                cudaMalloc((void**)&sampled_descriptors, 2 * desc_channels * sizeof(float));
+                
+                // 执行grid_sample
+                grid_sample_cuda(
+                    &descriptor_map[b * desc_channels * desc_height * desc_width],
+                    grid_points.data(),
+                    sampled_descriptors,
+                    1, desc_channels, desc_height, desc_width,
+                    2, 1, true);
+                
+                // 归一化描述符
+                normalize_cuda(sampled_descriptors, 2, desc_channels, 2.0f, 1e-5f);
+                
+                // 计算相似度得分（这里简化处理，实际应用中应使用预测器）
+                float score = 0.0f;
+                for (int c = 0; c < desc_channels; ++c) {
+                    score += sampled_descriptors[c] * sampled_descriptors[desc_channels + c];
+                }
+                
+                // 释放GPU内存
+                cudaFree(sampled_descriptors);
+                
+                // 如果得分高于阈值，则保留槽位
+                if (score > 0.5f) {
+                    batch_slots.push_back({conf, {x1, y1, x2, y2}});
+                }
+            }
+        }
+        
+        output_slots[b] = batch_slots;
+    }
+}
+
+// 修改后的后处理函数
+void PsDet::postprocess(std::vector<std::vector<KeyPoint>>& output_points,
+                        std::vector<std::vector<ParkingSlot>>& output_slots) {
+    // 获取实际批量大小（根据输入维度）
+    Dims input_dims = context_->getBindingDimensions(0);
+    int actual_batch_size = input_dims.d[0];
+    
+    // 处理点预测
+    process_points(output_points_h_.data(), output_points, actual_batch_size);
+    
+    // 处理槽位预测（假设描述符图在output_slots_h_中）
+   /*  process_slots(output_slots_h_.data(), output_points_h_.data(), 
+                 output_slots, actual_batch_size); */
+
+                 
+} 
+
+// 改进的NMS实现（与Python版本一致）
+std::vector<KeyPoint> PsDet::applyNMS(
+    const std::vector<KeyPoint>& points, 
+    float dist_thresh) {
+    
+    const size_t num_points = points.size();
+    std::vector<bool> suppressed(num_points, false);
+    std::vector<KeyPoint> result;
+    
+    // 遍历所有点对
+    for (size_t i = 0; i < num_points; ++i) {
+        for (size_t j = i + 1; j < num_points; ++j) {
+            float dx = std::abs(points[i].x - points[j].x);
+            float dy = std::abs(points[i].y - points[j].y);
+            
+            if (dx < dist_thresh && dy < dist_thresh) {
+                if (points[i].conf < points[j].conf) {
+                    suppressed[i] = true;
+                } else {
+                    suppressed[j] = true;
+                }
+            }
+        }
+    }
+    
+    // 收集未被抑制的点
+    for (size_t i = 0; i < num_points; ++i) {
+        if (!suppressed[i]) {
+            result.push_back(points[i]);
+        }
+    }
+    
+    return result;
+}
+
 
 // 执行推理
 bool PsDet::infer(const cv::Mat& image, 
@@ -526,11 +602,7 @@ bool PsDet::infer(const cv::Mat& image,
 
     // 应该将output_points_h_，output_slots_h_分别转换成（3,16,16) 和 （128，16，16）的矩阵
     
-
-
-
-
-    //postprocess(output_points_h_, output_slots_h_);
+    postprocess(output_points, output_slots);
     
     return true;
 }

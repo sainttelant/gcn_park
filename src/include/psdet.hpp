@@ -95,11 +95,29 @@ private:
     float point_thresh_ = 0.008f;
     float slot_thresh_ = 0.05f;
     float nms_thresh_ = 0.0625f;    
-
+    
+   /*  void grid_sample_cuda(const float* input, const float* grid, float* output, 
+                         int batch_size, int channels, int in_h, int in_w, 
+                         int out_h, int out_w, bool align_corners);
+                         
+    void normalize_cuda(float* data, int num_elements, int dim, float p, float eps); */
 
     void preprocess(const cv::Mat& image, float* input);
     void postprocess(std::vector<std::vector<KeyPoint>>& output_points,
                      std::vector<std::vector<ParkingSlot>>& output_slots);
+
+      void process_points(
+        const float* points_data,
+        std::vector<std::vector<KeyPoint>>& output_points,
+        int batch_size
+    );
+
+      void process_slots(
+        const float* slots_data,
+        const float* descriptor_map,
+        std::vector<std::vector<ParkingSlot>>& output_slots,
+        int batch_size
+    );
     
     // NMS函数
     std::vector<KeyPoint> applyNMS(
