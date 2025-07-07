@@ -134,6 +134,10 @@ class PointDetector(nn.modules.Module):
                 mask[batch_idx, 1:3, row, col].fill_(1.)
         return targets, mask
 
+
+   
+
+
     def post_processing(self, data_dict):
         ret_dicts = {}
         pred_dicts = {}
@@ -143,8 +147,21 @@ class PointDetector(nn.modules.Module):
         
         points_pred_batch = []
         slots_pred = []
+  
+        
         for b, marks in enumerate(points_pred):
             points_pred = get_predicted_points(marks, self.cfg.point_thresh, self.cfg.boundary_thresh)
+
+            for i in range(len(points_pred)):
+                points_pred[i] = (points_pred[i][0], points_pred[i][1][:2])
+                score = points_pred[i][0]
+                x_val = points_pred[i][1][0]
+                y_val = points_pred[i][1][1]
+
+                output_data = np.column_stack((score, x_val, y_val))
+                # 将数组写入文件
+                with open('images/predictions/output_points_python.txt', 'a') as f:
+                    np.savetxt(f, output_data, delimiter=' ', fmt="%.6f")
             points_pred_batch.append(points_pred)
          
             if len(points_pred) > 0:

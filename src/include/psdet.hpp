@@ -9,6 +9,7 @@
 #include <NvInfer.h>
 #include <NvOnnxParser.h>
 #include <opencv2/opencv.hpp>
+#include <array>
 
 namespace psdet {
 
@@ -36,7 +37,14 @@ struct KeyPoint {
 
 struct ParkingSlot {
     float confidence;
-    float coords[4]; // x1, y1, x2, y2
+      std::array<float, 4> coords; 
+};
+
+struct Config {
+    bool use_slant_predictor = true;
+    bool use_vacant_predictor = true;
+    bool use_gnn = true;
+    
 };
 
 class PsDet {
@@ -95,7 +103,9 @@ private:
     float point_thresh_ = 0.008f;
     float slot_thresh_ = 0.05f;
     float nms_thresh_ = 0.0625f;    
+    int max_points_cfg = 10;
     
+    Config cfg_;
    /*  void grid_sample_cuda(const float* input, const float* grid, float* output, 
                          int batch_size, int channels, int in_h, int in_w, 
                          int out_h, int out_w, bool align_corners);
@@ -113,7 +123,7 @@ private:
     );
 
       void process_slots(
-        const float* slots_data,
+         const std::vector<std::vector<KeyPoint>>& points_list, 
         const float* descriptor_map,
         std::vector<std::vector<ParkingSlot>>& output_slots,
         int batch_size

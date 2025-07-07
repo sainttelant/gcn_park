@@ -60,14 +60,23 @@ class PointDetectorBase(nn.Module):
             
             # saving data_dict as txt file 
             import numpy as np
+            np.set_printoptions(precision=9)
 
-            points_pred_2d = data_dict['points_pred'].cpu().detach().numpy().astype(np.float32).reshape(-1,3*16*16)
+            # 获取并处理 points_pred_2d 数据
+            points_pred_2d = data_dict['points_pred'].cpu().detach().numpy().astype(np.float32).reshape(-1, 3 * 16 * 16)
             print("the sum of points_pred_2d:", points_pred_2d.sum())
-            np.savetxt('images/predictions/points_pred_python.txt', points_pred_2d)
-            
-            descriptor_map = data_dict['descriptor_map'].cpu().detach().numpy().astype(np.float32).reshape(-1,128*16*16)
+
+            # 将 points_pred_2d 展平为一维数组，并写入文件
+            points_pred_2d_flattened = points_pred_2d.flatten()
+            np.savetxt('images/predictions/points_pred_python.txt', points_pred_2d_flattened, fmt='%.9f')
+
+            # 获取并处理 descriptor_map 数据
+            descriptor_map = data_dict['descriptor_map'].cpu().detach().numpy().astype(np.float32).reshape(-1, 128 * 16 * 16)
             print("the sum of descriptor_map:", descriptor_map.sum())
-            np.savetxt('images/predictions/descriptor_map_python.txt', descriptor_map)
+
+            # 将 descriptor_map 展平为一维数组，并写入文件
+            descriptor_map_flattened = descriptor_map.flatten()
+            np.savetxt('images/predictions/descriptor_map_python.txt', descriptor_map_flattened, fmt='%.9f')
 
             pred_dicts, ret_dicts = self.post_processing(data_dict)
             

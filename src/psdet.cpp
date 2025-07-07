@@ -363,99 +363,196 @@ void PsDet::preprocess(const cv::Mat& image, float* input) {
 void PsDet::process_points(
     const float* points_data,
     std::vector<std::vector<KeyPoint>>& output_points,
-    int batch_size) {
+    int batch_size) 
+{
     
     output_points.clear();
-    output_points.resize(batch_size);
+    //output_points.resize(batch_size);
     
-    for (int b = 0; b < batch_size; ++b) {
-        std::vector<KeyPoint> batch_points;
-        
-        // 解析点数据
-        for (int i = 0; i < max_points_; ++i) {
-            const int base_idx = b * max_points_ * 3 + i * 3;
-            const float conf = points_data[base_idx];
-            const float x = points_data[base_idx + 1];
-            const float y = points_data[base_idx + 2];
-            
-            if (conf > point_thresh_) {
-                batch_points.push_back({conf, x, y});
+    std::vector<KeyPoint> points;
+    for (int i = 0; i < 16; ++i) {       // 行循环
+        for (int j = 0; j < 16; ++j) {   // 列循环
+            const int base_idx = i * 16 + j;
+            const float conf = points_data[0 * 256 + base_idx]; // 通道0：置信度
+            const float offset_x = points_data[1 * 256 + base_idx]; // 通道1：x偏移
+            const float offset_y = points_data[2 * 256 + base_idx]; // 通道2：y偏移
+
+            if (conf >= point_thresh_) {
+                const float xval = (j + offset_x) / 16.0f; // 归一化坐标计算
+                const float yval = (i + offset_y) / 16.0f;
+
+                // 边界检查（跳过边缘点）
+                if (xval >= slot_thresh_ && xval <= (1 - slot_thresh_) &&
+                    yval >= slot_thresh_ && yval <= (1 - slot_thresh_)) {
+                    
+                    // 创建KeyPoint实例并添加到容器
+                    points.push_back(KeyPoint{conf, xval, yval});
+                }
             }
         }
-        
-        // 应用改进的NMS
-        auto nms_points = applyNMS(batch_points, nms_thresh_);
-        output_points[b] = nms_points;
     }
+
+
+    // 应用改进的NMS
+    auto nms_points = applyNMS(points, nms_thresh_);
+    output_points.push_back(nms_points);
+    
 }
 
 
 
 void PsDet::process_slots(
-    const float* slots_data,
+     const std::vector<std::vector<KeyPoint>>& points_list, 
     const float* descriptor_map,
     std::vector<std::vector<ParkingSlot>>& output_slots,
-    int batch_size) {
-    
+    int batch_size)
+{
     output_slots.clear();
-    output_slots.resize(batch_size);
+    //output_slots.resize(batch_size);
     
-    // 假设描述符图的尺寸
+    // 描述符图的尺寸信息
     const int desc_channels = 128;
     const int desc_height = input_height_ / 4;
     const int desc_width = input_width_ / 4;
     
+
+    std::vector<KeyPoint> points_for_reserve;
+    points_for_reserve.reserve(max_points_cfg);
+    points_for_reserve.resize(max_points_cfg); // 使用 resize 而不是 reserve
+
+        // 将 points_for_reserve 初始化为 max_points_cfg 个空的 KeyPoint
+        for (int i = 0; i < max_points_cfg; ++i) {
+            points_for_reserve[i] = KeyPoint{0.0f, 0.0f, 0.0f};
+        }
+
+        // 将 points_list[0] 复制到 points_for_reserve
+        int points_to_copy = std::min(static_cast<int>(points_list[0].size()), max_points_cfg);
+        for (int i = 0; i < points_to_copy; ++i) {
+            points_for_reserve[i].conf = points_list[0][i].conf;
+            points_for_reserve[i].x = points_list[0][i].x;
+            points_for_reserve[i].y = points_list[0][i].y;
+        }
     // 为每个批次处理槽位
     for (int b = 0; b < batch_size; ++b) {
+       
         std::vector<ParkingSlot> batch_slots;
         
-        // 解析槽位数据
-        for (int i = 0; i < max_slots_; ++i) {
-            const int base_idx = b * max_slots_ * 5 + i * 5;
-            const float conf = slots_data[base_idx];
-            const float x1 = slots_data[base_idx + 1];
-            const float y1 = slots_data[base_idx + 2];
-            const float x2 = slots_data[base_idx + 3];
-            const float y2 = slots_data[base_idx + 4];
+
+        // 1. 采样关键点的描述符
+        std::vector<float> descriptors;
+        std::vector<float> grid_points;
+        grid_points.reserve(max_points_cfg);
+        
+        // 准备采样网格
+        for (const auto& kp : points_for_reserve) {
+            // 归一化坐标转网格坐标
+            float grid_x = kp.x * 2 - 1;  // [-1, 1] 范围
+            float grid_y = kp.y * 2 - 1;
+            grid_points.push_back(grid_x);
+            grid_points.push_back(grid_y);
+        }
+        
+        // 在GPU上采样描述符
+        const int num_points = points_for_reserve.size();
+        float* sampled_descriptors;
+        cudaMalloc((void**)&sampled_descriptors, 1 * 128*1*10 * sizeof(float));
+        
+
+        for (auto &point: grid_points) {
             
-            if (conf > slot_thresh_) {
-                // 创建归一化的网格点用于采样
-                std::vector<float> grid_points = {
-                    x1 * 2 - 1, y1 * 2 - 1,
-                    x2 * 2 - 1, y2 * 2 - 1
-                };
+            printf("point: %f\n", point);
+        }
+        // 执行grid_sample
+        grid_sample_cuda(
+            &descriptor_map[1 * desc_channels * 16 * 16],
+            grid_points.data(),
+            sampled_descriptors,
+            num_points, desc_channels, 1, 10,
+            1, 1, true);
+        
+        // 归一化描述符
+        normalize_cuda(sampled_descriptors, num_points, desc_channels, 2.0f, 1e-5f);
+        
+        // 2. 构建数据字典（模拟Python的data_dict）
+        struct SlotData {
+            std::vector<float> descriptors;
+            std::vector<KeyPoint> points;
+            std::vector<float> slant_pred;
+            std::vector<float> vacant_pred;
+            std::vector<float> edge_pred;
+        };
+        
+        SlotData data_dict;
+        
+        // 将GPU数据拷贝回CPU
+        data_dict.descriptors.resize(num_points * desc_channels);
+        cudaMemcpy(data_dict.descriptors.data(), sampled_descriptors, 
+                  num_points * desc_channels * sizeof(float), cudaMemcpyDeviceToHost);
+        
+        data_dict.points = points_for_reserve;
+        
+        // 3. 倾斜预测器（如果配置了）
+        if (cfg_.use_slant_predictor) 
+        {
+            
+            data_dict.slant_pred.resize(num_points * 2);  // 每个点有起点和终点倾斜
+            for (int i = 0; i < num_points * 2; ++i) {
+                data_dict.slant_pred[i] = static_cast<float>(rand()) / RAND_MAX;
+            }
+        }
+        
+        // 4. 空位预测器（如果配置了）
+        if (cfg_.use_vacant_predictor) {
+            // 实际应用中应调用空位预测器模型
+            data_dict.vacant_pred.resize(num_points);
+            for (int i = 0; i < num_points; ++i) {
+                data_dict.vacant_pred[i] = static_cast<float>(rand()) / RAND_MAX;
+            }
+        }
+        
+        // 5. 图神经网络处理（如果配置了）
+        if (cfg_.use_gnn) {
+            // 实际应用中应调用GNN模型
+            // 这里简化处理：添加随机噪声
+            for (float& val : data_dict.descriptors) {
+                val += (static_cast<float>(rand()) / RAND_MAX - 0.5f) * 0.1f;
+            }
+        }
+        
+        // 6. 边缘预测器
+        // 实际应用中应调用边缘预测器模型
+        // 这里简化实现：连接空间上接近的点
+        const float connection_threshold = 0.05f;  // 归一化距离阈值
+        
+        for (size_t i = 0; i < points_for_reserve.size(); ++i) {
+            for (size_t j = i + 1; j < points_for_reserve.size(); ++j) {
+                const auto& p1 = points_for_reserve[i];
+                const auto& p2 = points_for_reserve[j];
                 
-                // 在GPU上采样描述符
-                float* sampled_descriptors;
-                cudaMalloc((void**)&sampled_descriptors, 2 * desc_channels * sizeof(float));
+                // 计算归一化距离
+                float dx = p1.x - p2.x;
+                float dy = p1.y - p2.y;
+                float dist_sq = dx * dx + dy * dy;
                 
-                // 执行grid_sample
-                grid_sample_cuda(
-                    &descriptor_map[b * desc_channels * desc_height * desc_width],
-                    grid_points.data(),
-                    sampled_descriptors,
-                    1, desc_channels, desc_height, desc_width,
-                    2, 1, true);
-                
-                // 归一化描述符
-                normalize_cuda(sampled_descriptors, 2, desc_channels, 2.0f, 1e-5f);
-                
-                // 计算相似度得分（这里简化处理，实际应用中应使用预测器）
-                float score = 0.0f;
-                for (int c = 0; c < desc_channels; ++c) {
-                    score += sampled_descriptors[c] * sampled_descriptors[desc_channels + c];
-                }
-                
-                // 释放GPU内存
-                cudaFree(sampled_descriptors);
-                
-                // 如果得分高于阈值，则保留槽位
-                if (score > 0.5f) {
-                    batch_slots.push_back({conf, {x1, y1, x2, y2}});
+                // 如果距离小于阈值且方向大致相同，则连接
+                if (dist_sq < connection_threshold * connection_threshold) {
+                    // 置信度基于距离和点的置信度
+                    float conf = (p1.conf + p2.conf) * 0.5f * 
+                                (1.0f - sqrt(dist_sq) / connection_threshold);
+                    
+                   if (conf > slot_thresh_) 
+                        {
+                            ParkingSlot slot;
+                            slot.confidence = conf;
+                            slot.coords = {p1.x, p1.y, p2.x, p2.y}; 
+                            batch_slots.push_back(slot);
+                        };
                 }
             }
         }
         
+        // 7. 清理资源
+        cudaFree(sampled_descriptors);
         output_slots[b] = batch_slots;
     }
 }
@@ -469,10 +566,23 @@ void PsDet::postprocess(std::vector<std::vector<KeyPoint>>& output_points,
     
     // 处理点预测
     process_points(output_points_h_.data(), output_points, actual_batch_size);
+
+    // write output_points to txt file 
+    std::ofstream file("images/predictions/output_points_cpp.txt");
+    
+    if (!output_points.empty()) {
+       for (const auto& points : output_points) {
+           for (const auto& point : points) {
+               file << std::fixed << std::setprecision(6) << point.conf << " " << point.x << " " << point.y << std::endl;
+           }
+       }
+    }
+ 
+    file.close();
     
     // 处理槽位预测（假设描述符图在output_slots_h_中）
-   /*  process_slots(output_slots_h_.data(), output_points_h_.data(), 
-                 output_slots, actual_batch_size); */
+    process_slots(output_points, output_slots_h_.data(), 
+                 output_slots, actual_batch_size);  
 
                  
 } 

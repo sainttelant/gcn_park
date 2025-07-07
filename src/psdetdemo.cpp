@@ -101,8 +101,8 @@ int main() {
     //const std::string engine_path = "new.engine";
     const int input_width = 512;
     const int input_height = 512;
-    const int max_points = 100;
-    const int max_slots = 50;
+    const int max_points_original = 1*3*16*16;
+    const int max_slots_original = 1*128*16*16;
 
     // 图片目录设置
     const std::string image_dir = "/workspace/APA/gcn-parking-slot/images/";
@@ -115,7 +115,7 @@ int main() {
     std::cout << "找到 " << image_paths.size() << " 张图片待处理" << std::endl;
 
     // 初始化检测器
-    psdet::PsDet detector(onnx_path, engine_path, 1, max_points, max_slots, input_width, input_height);
+    psdet::PsDet detector(onnx_path, engine_path, 1, max_points_original, max_slots_original, input_width, input_height);
     
     // 构建或加载引擎
     if (!detector.load()) {
