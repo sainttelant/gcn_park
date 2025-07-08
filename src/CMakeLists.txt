@@ -24,6 +24,9 @@ set(TENSORRT_DIR /usr/include/aarch64-linux-gnu/)  # 替换为实际路径
 set(Tensorrt_LIB /usr/lib/aarch64-linux-gnu/)  # 替换为实际路径
 set(CUDA_DIR /usr/local/cuda-12.6/targets/aarch64-linux/include/)
 set(CUDA_LIB /usr/local/cuda-12.6/targets/aarch64-linux/lib/)
+set(CUDA_STUBS /usr/local/cuda-12.6/targets/aarch64-linux/lib/stubs/)
+
+set(DEPS ${DEPS} nvcudla cudla cuda cudart cublas)  # 添加cublas库
 # 包含TensorRT头文件
 include_directories(${TENSORRT_DIR}
     ${PROJECT_SOURCE_DIR}/include
@@ -41,20 +44,19 @@ file(GLOB Project_ops_src  ${PROJECT_SOURCE_DIR}/common/*.cu ${PROJECT_SOURCE_DI
 
 set(shared_target psdet_ops)
 
-cuda_add_library(${shared_target} SHARED ${Project_ops_src} OPTIONS -arch=sm_${ARCH})
+cuda_add_library(${shared_target} SHARED ${Project_ops_src}  OPTIONS -arch=sm_${ARCH})
 
 install (
     TARGETS ${shared_target}
     LIBRARY DESTINATION lib
 )
 
-
-
 message("TensorRT_DIR: ${TENSORRT_DIR}")
 message("project source dir: ${PROJECT_SOURCE_DIR}")
 # 链接TensorRT库
 link_directories(${Tensorrt_LIB} 
 ${CUDA_LIB}
+${CUDA_STUBS}
 )
 
 # 添加可执行文件
@@ -66,11 +68,13 @@ add_executable(psdet_demo
 # 链接库
 target_link_libraries(psdet_demo 
     ${OpenCV_LIBS}
+    ${DEPS}
     nvinfer
     nvonnxparser
     cudart
     psdet_ops 
     cuda
+    cublas  # 添加cublas库
 )
 
 # 设置输出目录

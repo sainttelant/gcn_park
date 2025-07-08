@@ -96,7 +96,7 @@ std::vector<std::string> getJpgImagesInDirectory(const std::string& dir_path) {
 
 int main() {
     // 配置参数
-    const std::string onnx_path = "/workspace/APA/gcn-parking-slot/cache/ps_gat/100/output_onnx/model_simplified.onnx";
+    const std::string onnx_path = "cache/ps_gat/100/output_onnx/model.onnx";
     const std::string engine_path = "cache/ps_gat/100/output_onnx/new.engine";
     //const std::string engine_path = "new.engine";
     const int input_width = 512;
@@ -105,7 +105,7 @@ int main() {
     const int max_slots_original = 1*128*16*16;
 
     // 图片目录设置
-    const std::string image_dir = "/workspace/APA/gcn-parking-slot/images/";
+    const std::string image_dir = "images/";
     std::vector<std::string> image_paths = getJpgImagesInDirectory(image_dir);
 
     if (image_paths.empty()) {

@@ -30,18 +30,9 @@ PsDet::PsDet(const std::string& onnx_path,
 // 析构函数 - 修复销毁顺序[8](@ref)
 PsDet::~PsDet() {
     destroyBuffers();
-    if (context_) {
-        context_->destroy();
-        context_ = nullptr;
-    }
-    if (engine_) {
-        engine_->destroy();
-        engine_ = nullptr;
-    }
-    if (runtime_) {
-        runtime_->destroy();
-        runtime_ = nullptr;
-    }
+    delete context_;   // 替换 context_->destroy()
+    delete engine_;    // 替换 engine_->destroy()
+    delete runtime_;   // 替换 runtime_->destroy()
 }
 
 // 初始化CUDA缓冲区
@@ -67,6 +58,7 @@ void PsDet::destroyBuffers() {
     stream_ = nullptr;
 }
 
+    
 bool PsDet::build(bool fp16) {
     // 记录构建开始
     logger_.log(ILogger::Severity::kINFO, "Starting TensorRT engine build process...");
@@ -85,50 +77,32 @@ bool PsDet::build(bool fp16) {
     INetworkDefinition* network = builder->createNetworkV2(explicitBatch);
     if (!network) {
         logger_.log(ILogger::Severity::kERROR, "Failed to create network definition");
-        builder->destroy();
+        delete builder;
         return false;
     }
-
-    // 3. 解析ONNX模型（增强错误处理）
-    nvonnxparser::IParser* parser = nvonnxparser::createParser(*network, logger_);
-    if (!parser) {
-        logger_.log(ILogger::Severity::kERROR, "Failed to create ONNX parser");
-        network->destroy();
-        builder->destroy();
-        return false;
-    }
-
-    if (!parser->parseFromFile(onnx_path_.c_str(), static_cast<int>(ILogger::Severity::kWARNING))) {
-        // 获取详细的解析错误信息
-        const int numErrors = parser->getNbErrors();
-        for (int i = 0; i < numErrors; ++i) {
-            const auto* error = parser->getError(i);
-            logger_.log(ILogger::Severity::kERROR, ("ONNX Parse Error: " + std::string(error->desc())).c_str());
+    
+    // 3. 解析ONNX模型
+    auto parser = nvonnxparser::createParser(*network, logger_);
+    if (!parser || !parser->parseFromFile(onnx_path_.c_str(), static_cast<int>(ILogger::Severity::kWARNING))) {
+        logger_.log(ILogger::Severity::kERROR, "ONNX parsing failed");
+        if (parser) {
+            for (int i = 0; i < parser->getNbErrors(); ++i) {
+                logger_.log(ILogger::Severity::kERROR, parser->getError(i)->desc());
+            }
+            delete parser;
         }
-        parser->destroy();
-        network->destroy();
-        builder->destroy();
+        delete network;
+        delete builder;
         return false;
     }
 
-    // 4. 创建构建配置
+    // 创建配置
     IBuilderConfig* config = builder->createBuilderConfig();
     if (!config) {
-        logger_.log(ILogger::Severity::kERROR, "Failed to create builder config");
-        parser->destroy();
-        network->destroy();
-        builder->destroy();
-        return false;
-    }
-
-    // 5. 设置优化配置文件（关键调试点）
-    IOptimizationProfile* profile = builder->createOptimizationProfile();
-    if (!profile) {
-        logger_.log(ILogger::Severity::kERROR, "Failed to create optimization profile");
-            //config->destroy();
-        parser->destroy();
-        network->destroy();
-        builder->destroy();
+        logger_.log(ILogger::Severity::kERROR, "Failed to create builder configuration");
+        delete parser;
+        delete network;
+        delete builder;
         return false;
     }
 
@@ -136,11 +110,11 @@ bool PsDet::build(bool fp16) {
     ITensor* input = network->getInput(0);
     if (!input) {
         logger_.log(ILogger::Severity::kERROR, "Network has no input tensors");
-        //profile->destroy();
-            //config->destroy();
-        parser->destroy();
-        network->destroy();
-        builder->destroy();
+        
+        delete config;
+        delete parser;
+        delete network;
+        delete builder;
         return false;
     }
 
@@ -162,26 +136,6 @@ bool PsDet::build(bool fp16) {
         return false;
     }
 
-    // 1. 打印所有输入张量信息（支持多输入）
-        int num_inputs = network->getNbInputs();
-        logger_.log(ILogger::Severity::kINFO, 
-                    ("Network has " + std::to_string(num_inputs) + " inputs").c_str());
-
-        for (int idx = 0; idx < num_inputs; ++idx) {
-            ITensor* input_tensor = network->getInput(idx);
-            const char* tensor_name = input_tensor->getName();
-            Dims dims = input_tensor->getDimensions();
-
-            // 构建详细维度描述字符串
-            std::string dim_str = "Input[" + std::to_string(idx) + "]: " + tensor_name + " : [";
-            for (int d = 0; d < dims.nbDims; ++d) {
-                dim_str += (dims.d[d] == -1) ? "?" : std::to_string(dims.d[d]); // 动态维度显示为?
-                if (d < dims.nbDims - 1) dim_str += ", ";
-            }
-            dim_str += "]";
-            logger_.log(ILogger::Severity::kINFO, dim_str.c_str());
-        }
-
     // 确保通道维度有效
     const int channels = input_dims.d[1] > 0 ? input_dims.d[1] : 3;
     if (channels != 1 && channels != 3) {
@@ -191,8 +145,6 @@ bool PsDet::build(bool fp16) {
     }
 
     // 设置优化范围（使用用户配置的尺寸）
-    if (1)
-    {
     const Dims min_dims = Dims4{1, channels, input_height_ / 2, input_width_ / 2};
     const Dims opt_dims = Dims4{max_batch_size_, channels, input_height_, input_width_};
     const Dims max_dims = Dims4{max_batch_size_, channels, input_height_ * 2, input_width_ * 2};
@@ -209,23 +161,15 @@ bool PsDet::build(bool fp16) {
     logger_.log(ILogger::Severity::kINFO, ("  MAX shape: " + dimsToString(max_dims)).c_str());
 
     // 应用优化配置
+    IOptimizationProfile* profile = builder->createOptimizationProfile();
     profile->setDimensions(input_name, OptProfileSelector::kMIN, min_dims);
     profile->setDimensions(input_name, OptProfileSelector::kOPT, opt_dims);
     profile->setDimensions(input_name, OptProfileSelector::kMAX, max_dims);
     config->addOptimizationProfile(profile);
-    }
-    else
-    {
-        // fixed shape
-        nvinfer1::ITensor* input = network->getInput(0);
-        input->setDimensions(nvinfer1::Dims4(1, 3, 512, 512));
-    }
-
-
 
     config->setMemoryPoolLimit(MemoryPoolType::kWORKSPACE, 1 << 30); // 1GB
 
-    // 6. 设置计算精度
+    // 设置计算精度
     if (fp16 && builder->platformHasFastFp16()) {
         config->setFlag(BuilderFlag::kFP16);
         logger_.log(ILogger::Severity::kINFO, "FP16 mode enabled");
@@ -233,79 +177,140 @@ bool PsDet::build(bool fp16) {
         logger_.log(ILogger::Severity::kINFO, "Using FP32 precision");
     } 
 
+    // 构建序列化引擎
+    logger_.log(ILogger::Severity::kINFO, "Building engine... (this may take several minutes)");
+    IHostMemory* serialized_engine = builder->buildSerializedNetwork(*network, *config);
     
-
-    // 7. 构建引擎（增加详细日志）
-    printf("Building engine... (this may take several minutes) \n");
-    ICudaEngine* engine = builder->buildEngineWithConfig(*network, *config);
-    
-    if (!engine) {
+    if (!serialized_engine) {
         logger_.log(ILogger::Severity::kERROR, "Engine build failed. Possible causes:");
         logger_.log(ILogger::Severity::kERROR, "1. Insufficient GPU memory");
         logger_.log(ILogger::Severity::kERROR, "2. Unsupported ONNX operator");
         logger_.log(ILogger::Severity::kERROR, "3. Invalid optimization profile settings");
         
-        // 清理资源
-       // profile->destroy();
-            //config->destroy();
-        parser->destroy();
-        network->destroy();
-        builder->destroy();
+        // 资源清理
+        delete config;
+        delete parser;
+        delete network;
+        delete builder;
         return false;
     }
-
-    for (int i = 0; i < engine->getNbBindings(); ++i) {
-        Dims dims = engine->getBindingDimensions(i);
-        std::string type = (engine->bindingIsInput(i)) ? "Input" : "Output";
-        std::cout << type << "[" << i << "] : ";
-        for (int d = 0; d < dims.nbDims; ++d) {
-            std::cout << (dims.d[d] == -1 ? "?" : std::to_string(dims.d[d])) << " ";
-        }
-        std::cout << std::endl;
-    }
-
-
-     printf("before serializing engine <<<<<<<<<<<<<<<<<<<\n");
-    // 8. 序列化引擎
-    IHostMemory* serialized_engine = engine->serialize();
-    if (!serialized_engine) {
-        logger_.log(ILogger::Severity::kERROR, "Failed to serialize engine");
-        engine->destroy();
-       // profile->destroy();
-            //config->destroy();
-        parser->destroy();
-        network->destroy();
-        builder->destroy();
-        return false;
-    }
-    printf("before saving engine <<<<<<<<<<<<<<<<<<<\n");
-    // 9. 保存引擎文件
+    
+    // 保存引擎文件
     std::ofstream ofs(engine_path_, std::ios::binary);
     if (ofs) {
-        ofs.write(reinterpret_cast<const char*>(serialized_engine->data()), serialized_engine->size());
+        ofs.write(static_cast<const char*>(serialized_engine->data()), serialized_engine->size());
         logger_.log(ILogger::Severity::kINFO, 
                    ("Engine saved successfully. Size: " + 
                     std::to_string(serialized_engine->size() / (1024 * 1024)) + " MB").c_str());
     } else {
         logger_.log(ILogger::Severity::kERROR, 
                    ("Failed to open engine file for writing: " + engine_path_).c_str());
+        delete serialized_engine;
+        delete config;
+        delete parser;
+        delete network;
+        delete builder;
+        return false;
     }
 
-    printf("before destroy <<<<<<<<<<<<<<<<<<<\n");
-    // 10. 资源清理（使用安全销毁模式）
-    auto safeDestroy = [](auto* obj) { if (obj) obj->destroy(); };
-    safeDestroy(serialized_engine);
-    safeDestroy(engine);
-    //safeDestroy(profile);
-    safeDestroy(config);
-    safeDestroy(parser);
-    safeDestroy(network);
-    safeDestroy(builder);
+    // 资源清理（TensorRT 10.3 使用 delete 替代 destroy）
+    delete serialized_engine;
+    delete config;
+    delete parser;
+    delete network;
+    delete builder;
 
-    return ofs.good();
-   // logger_.log(ILogger::Severity::kINFO, "Engine build complete and save to " + engine_path_.c_str());
-    printf("Engine build complete and save to %s\n", engine_path_.c_str());
+    logger_.log(ILogger::Severity::kINFO, ("Engine build complete and saved to "+engine_path_).c_str());
+    return true;
 }
+bool PsDet::infer(const cv::Mat& image, 
+                  std::vector<std::vector<KeyPoint>>& output_points, 
+                  std::vector<std::vector<ParkingSlot>>& output_slots) {
+    if (!engine_ || !context_) return false;
+    
+    // 预处理
+    preprocess(image, input_h_.data());
+    
+    // 数据传输
+    cudaMemcpyAsync(input_d_, input_h_.data(), 
+                   input_h_.size() * sizeof(float), 
+                   cudaMemcpyHostToDevice, stream_);
+    
+    // 设置绑定
+    void* bindings[] = {input_d_, output_points_d_, output_slots_d_};
+    
+    // 使用显式批处理
+    if (!engine_->hasImplicitBatchDimension()) {
+        std::cout << "引擎支持显式批处理" << std::endl;
+        Dims4 input_dims{1, input_channels_, input_height_, input_width_};
+        context_->setInputShape(0, input_dims);
+    }
+
+    // 确保所有输入张量的形状和地址都已设置
+    for (int i = 0; i < engine_->getNbIOTensors(); ++i) {
+        const char* tensor_name = engine_->getIOTensorName(i);
+        if (engine_->getTensorIOMode(tensor_name) == nvinfer1::TensorIOMode::kINPUT) {
+            std::cout << "Setting shape and address for input tensor: " << tensor_name << std::endl;
+            context_->setInputShape(tensor_name, engine_->getTensorShape(tensor_name));
+            context_->setTensorAddress(tensor_name, bindings[i]);
+        }
+    }
+
+    // 执行推理
+    if (!context_->enqueueV3(stream_)) {
+        std::cerr << "Failed to enqueue inference" << std::endl;
+        return false;
+    }
+    
+    // 获取结果
+    cudaMemcpyAsync(output_points_h_.data(), output_points_d_, 
+                   output_points_h_.size() * sizeof(float), 
+                   cudaMemcpyDeviceToHost, stream_);
+    cudaMemcpyAsync(output_slots_h_.data(), output_slots_d_, 
+                   output_slots_h_.size() * sizeof(float), 
+                   cudaMemcpyDeviceToHost, stream_);
+    
+    // 等待完成
+    cudaStreamSynchronize(stream_);
+
+    // 在执行推理后添加 for debug comparison with pth demo.py
+    const char* input_name = engine_->getIOTensorName(0);  // 获取输入张量名称
+    Dims opt_dims = engine_->getTensorShape(input_name);
+    std::cout << "real inference Dims: ";
+    for (int i=0; i<opt_dims.nbDims; ++i) 
+    std::cout << opt_dims.d[i] << " ";
+    const char* output_points_name = engine_->getIOTensorName(1);  // 获取输出张量名称
+    Dims points_dims = engine_->getTensorShape(output_points_name);
+
+    const char* output_slots_name = engine_->getIOTensorName(2);  // 获取输出张量名称
+    Dims slots_dims = engine_->getTensorShape(output_slots_name);
+    std::cout << ">Points output dims: ";
+    for (int i = 0; i < points_dims.nbDims; ++i) 
+        std::cout << points_dims.d[i] << " ";
+    std::cout << "\nSlots output dims: ";
+    for (int i = 0; i < slots_dims.nbDims; ++i)
+        std::cout << slots_dims.d[i] << " ";
+
+    // 在保存输出文件前添加
+    float sum_points = std::accumulate(output_points_h_.begin(), output_points_h_.end(), 0.0f);
+    float sum_slots = std::accumulate(output_slots_h_.begin(), output_slots_h_.end(), 0.0f);
+    std::cout << "Points输出总和: " << sum_points << " | Slots输出总和: " << sum_slots;
+    
+    // 检查CUDA错误
+    cudaError_t error = cudaGetLastError();
+    if (error != cudaSuccess) {
+        std::cerr << "CUDA error: " << cudaGetErrorString(error) << std::endl;
+        return false;
+    }
+    cudaStreamSynchronize(stream_);
+
+    // 应该将output_points_h_，output_slots_h_分别转换成（3,16,16) 和 （128，16，16）的矩阵
+    
+    postprocess(output_points, output_slots);
+    
+    return true;
+}
+
 
 // 加载引擎
 bool PsDet::load() {
@@ -324,16 +329,16 @@ bool PsDet::load() {
     
     engine_ = runtime_->deserializeCudaEngine(buffer.data(), size);
     if (!engine_) {
-        runtime_->destroy();
+        delete runtime_;
         runtime_ = nullptr;
         return false;
     }
     
     context_ = engine_->createExecutionContext();
     if (!context_ || !initBuffers()) {
-        if (context_) context_->destroy();
-        if (engine_) engine_->destroy();
-        if (runtime_) runtime_->destroy();
+        if (context_) delete context_;
+        if (engine_) delete engine_;
+        if (runtime_) delete runtime_;
         return false;
     }
     
@@ -678,10 +683,10 @@ void PsDet::process_points(
         float* sampled_descriptors = nullptr;
        
         // 设置张量维度
-        int input_dims[4] = {1, desc_channels, desc_height, desc_width};
-        int grid_dims[4] = {1, num_points, 1, 2}; // [N, H_out, W_out, 2]
+        int64_t input_dims[4] = {1, desc_channels, desc_height, desc_width};
+        int64_t grid_dims[4] = {1, num_points, 1, 2}; // [N, H_out, W_out, 2]
 
-        int output_dims[4] = {1, desc_channels, 1, num_points}; // [N, C, H_out, W_out]
+        int64_t output_dims[4] = {1, desc_channels, 1, num_points}; // [N, C, H_out, W_out]
 
         printf("Input dims: %d %d %d %d\n", input_dims[0], input_dims[1], input_dims[2], input_dims[3]);
         printf("Grid dims: %d %d %d %d\n", grid_dims[0], grid_dims[1], grid_dims[2], grid_dims[3]);
@@ -801,7 +806,11 @@ void PsDet::process_points(
 void PsDet::postprocess(std::vector<std::vector<KeyPoint>>& output_points,
                         std::vector<std::vector<ParkingSlot>>& output_slots) {
     // 获取实际批量大小（根据输入维度）
-    Dims input_dims = context_->getBindingDimensions(0);
+
+    const char* input_name = engine_->getIOTensorName(0);  // 获取输入张量名称
+    Dims input_dims = engine_->getTensorShape(input_name); 
+
+
     int actual_batch_size = input_dims.d[0];
     
     // 处理点预测
@@ -862,100 +871,6 @@ std::vector<KeyPoint> PsDet::applyNMS(
     return result;
 }
 
-
-// 执行推理
-bool PsDet::infer(const cv::Mat& image, 
-                  std::vector<std::vector<KeyPoint>>& output_points, 
-                  std::vector<std::vector<ParkingSlot>>& output_slots) {
-    if (!engine_ || !context_) return false;
-    
-    // 预处理
-    preprocess(image, input_h_.data());
-    
-    // 数据传输
-    cudaMemcpyAsync(input_d_, input_h_.data(), 
-                   input_h_.size() * sizeof(float), 
-                   cudaMemcpyHostToDevice, stream_);
-    
-    // 设置绑定
-    void* bindings[] = {input_d_, output_points_d_, output_slots_d_};
-    
-    // 使用动态
-    if (engine_->hasImplicitBatchDimension() == false) {
-        std::cout << "引擎支持显式批处理" << std::endl;
-        Dims4 input_dims{1, input_channels_, input_height_, input_width_};
-        context_->setBindingDimensions(0, input_dims);
-    }
-
-    // 执行推理
-    if (!context_->enqueueV2(bindings, stream_, nullptr)) {
-        return false;
-    }
-    
-    // 获取结果
-    cudaMemcpyAsync(output_points_h_.data(), output_points_d_, 
-                   output_points_h_.size() * sizeof(float), 
-                   cudaMemcpyDeviceToHost, stream_);
-    cudaMemcpyAsync(output_slots_h_.data(), output_slots_d_, 
-                   output_slots_h_.size() * sizeof(float), 
-                   cudaMemcpyDeviceToHost, stream_);
-    
-    // 等待完成
-    cudaStreamSynchronize(stream_);
-
-    // 在执行推理后添加 for debug comparison with pth demo.py
-    const Dims opt_dims = context_->getBindingDimensions(0);
-    std::cout << "real inference Dims: ";
-    for (int i=0; i<opt_dims.nbDims; ++i) 
-    std::cout << opt_dims.d[i] << " ";
-    Dims points_dims = context_->getBindingDimensions(1); // points输出索引
-    Dims slots_dims = context_->getBindingDimensions(2);  // slots输出索引
-    std::cout << ">Points output dims: ";
-    for (int i = 0; i < points_dims.nbDims; ++i) 
-        std::cout << points_dims.d[i] << " ";
-    std::cout << "\nSlots output dims: ";
-    for (int i = 0; i < slots_dims.nbDims; ++i)
-        std::cout << slots_dims.d[i] << " ";
-
-    // 在保存输出文件前添加
-    float sum_points = std::accumulate(output_points_h_.begin(), output_points_h_.end(), 0.0f);
-    float sum_slots = std::accumulate(output_slots_h_.begin(), output_slots_h_.end(), 0.0f);
-    std::cout << "Points输出总和: " << sum_points << " | Slots输出总和: " << sum_slots;
-    
-   
-   /*  std::ofstream output_points_file("images/predictions/output_points_orig.txt"), \
-    output_slots_file("images/predictions/output_slots_orig.txt");
-    for (const auto& point : output_points_h_) {
-        // 每存储一个就空行
-        output_points_file << std::endl;
-        output_points_file << std::fixed << std::setprecision(9) << point << " ";
-    }
-
-    output_points_file << std::endl;
-    for (const auto& slot : output_slots_h_) {
-        // 每存储一个就空行
-        output_slots_file << std::endl;
-        output_slots_file << std::fixed << std::setprecision(9) << slot << " ";
-    }
-    output_slots_file << std::endl;
-    output_points_file.close();
-    output_slots_file.close(); */
-    
-    // 检查CUDA错误
-    cudaError_t error = cudaGetLastError();
-    if (error != cudaSuccess) {
-        std::cerr << "CUDA error: " << cudaGetErrorString(error) << std::endl;
-        return false;
-    }
-    cudaStreamSynchronize(stream_);
-
-
-    // 应该将output_points_h_，output_slots_h_分别转换成（3,16,16) 和 （128，16，16）的矩阵
-    
-    postprocess(output_points, output_slots);
-    
-    return true;
-}
 
 void PsDet::visualizeResults(cv::Mat & car,cv::Mat& image,
                             const std::vector<std::vector<KeyPoint>>& points,
