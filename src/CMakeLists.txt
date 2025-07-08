@@ -3,7 +3,7 @@ project(ParkingSlotDetection)
 
 set(CMAKE_CXX_STANDARD 17)
 
-set(ARCH 89)  # 设置GPU架构 for ada5000 gpu
+set(ARCH 87)  # 设置GPU架构 for ada5000 gpu
 
 set(CMAKE_BUILD_TYPE "Debug")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g")
@@ -20,10 +20,10 @@ include_directories(${OpenCV_INCLUDE_DIRS})
 message("OpenCV_INCLUDE_DIRS: ${OpenCV_INCLUDE_DIRS}")
 
 # 设置TensorRT路径
-set(TENSORRT_DIR /usr/include/x86_64-linux-gnu)  # 替换为实际路径
-set(Tensorrt_LIB /usr/lib/x86_64-linux-gnu)  # 替换为实际路径
-set(CUDA_DIR /usr/local/cuda-11.8/targets/x86_64-linux/include/)
-set(CUDA_LIB /usr/local/cuda-11.8/targets/x86_64-linux/lib/)
+set(TENSORRT_DIR /usr/include/aarch64-linux-gnu/)  # 替换为实际路径
+set(Tensorrt_LIB /usr/lib/aarch64-linux-gnu/)  # 替换为实际路径
+set(CUDA_DIR /usr/local/cuda-12.6/targets/aarch64-linux/include/)
+set(CUDA_LIB /usr/local/cuda-12.6/targets/aarch64-linux/lib/)
 # 包含TensorRT头文件
 include_directories(${TENSORRT_DIR}
     ${PROJECT_SOURCE_DIR}/include

@@ -1924,7 +1924,7 @@ __global__ void grid_sampler_3d_kernel(
   }
 }
 
-void create_desc(const int *dims, int nb_dims, TensorDesc &desc) {
+void create_desc(const int64_t *dims, int nb_dims, TensorDesc &desc) {
   memcpy(&desc.shape[0], dims, sizeof(int) * nb_dims);
   desc.stride[nb_dims - 1] = 1;
   for (int i = nb_dims - 2; i >= 0; --i) {
@@ -1933,8 +1933,8 @@ void create_desc(const int *dims, int nb_dims, TensorDesc &desc) {
 }
 
 template <typename T>
-void grid_sample(T *output, const T *input, const T *grid, int *output_dims,
-                 int *input_dims, int *grid_dims, int nb_dims,
+void grid_sample(T *output, const T *input, const T *grid, int64_t *output_dims,
+                 int64_t *input_dims, int64_t *grid_dims, int nb_dims,
                  GridSamplerInterpolation interp, GridSamplerPadding padding,
                  bool align_corners, cudaStream_t stream) {
   TensorDesc input_desc;
@@ -1978,7 +1978,7 @@ void grid_sample(T *output, const T *input, const T *grid, int *output_dims,
 
 template <>
 void grid_sample(__half2 *output, const __half2 *input, const __half2 *grid,
-                 int *output_dims, int *input_dims, int *grid_dims, int nb_dims,
+                 int64_t *output_dims, int64_t *input_dims, int64_t *grid_dims, int nb_dims,
                  GridSamplerInterpolation interp, GridSamplerPadding padding,
                  bool align_corners, cudaStream_t stream) {
   TensorDesc input_desc;
@@ -2018,8 +2018,8 @@ void grid_sample(__half2 *output, const __half2 *input, const __half2 *grid,
 
 void grid_sample_int8(int8_4 *output, const float &scale_o, const int8_4 *input,
                       const float &scale_i, const int8_4 *grid,
-                      const float &scale_g, int *output_dims, int *input_dims,
-                      int *grid_dims, int nb_dims,
+                      const float &scale_g, int64_t *output_dims, int64_t *input_dims,
+                      int64_t *grid_dims, int nb_dims,
                       GridSamplerInterpolation interp,
                       GridSamplerPadding padding, bool align_corners,
                       cudaStream_t stream) {
@@ -2052,22 +2052,22 @@ void grid_sample_int8(int8_4 *output, const float &scale_o, const int8_4 *input,
 }
 
 template void grid_sample<float>(float *output, const float *input,
-                                 const float *grid, int *output_dims,
-                                 int *input_dims, int *grid_dims, int nb_dims,
+                                 const float *grid, int64_t *output_dims,
+                                 int64_t *input_dims, int64_t *grid_dims, int nb_dims,
                                  GridSamplerInterpolation interp,
                                  GridSamplerPadding padding, bool align_corners,
                                  cudaStream_t stream);
 
 template void grid_sample<__half>(__half *output, const __half *input,
-                                  const __half *grid, int *output_dims,
-                                  int *input_dims, int *grid_dims, int nb_dims,
+                                  const __half *grid, int64_t *output_dims,
+                                  int64_t *input_dims, int64_t *grid_dims, int nb_dims,
                                   GridSamplerInterpolation interp,
                                   GridSamplerPadding padding,
                                   bool align_corners, cudaStream_t stream);
 
 template void grid_sample<__half2>(__half2 *output, const __half2 *input,
-                                   const __half2 *grid, int *output_dims,
-                                   int *input_dims, int *grid_dims, int nb_dims,
+                                   const __half2 *grid, int64_t *output_dims,
+                                   int64_t *input_dims, int64_t *grid_dims, int nb_dims,
                                    GridSamplerInterpolation interp,
                                    GridSamplerPadding padding,
                                    bool align_corners, cudaStream_t stream);
