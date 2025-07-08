@@ -671,6 +671,7 @@ __global__ void grid_sampler_2d_kernel(
     const GridSamplerPadding padding_mode, const bool align_corners) {
 
 
+
   int C = input_desc.shape[1];
   int inp_H = input_desc.shape[2];
   int inp_W = input_desc.shape[3];

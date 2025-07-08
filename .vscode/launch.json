@@ -5,12 +5,12 @@
             "name": "Run with Compute Sanitizer",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/src/bin/psdet_demo", // 原程序路径
-            // "program": "/usr/local/cuda-12.6/compute-sanitizer/compute-sanitizer", // 工具路径
-             //"args": [
-              //  "--tool=memcheck", // 启用内存检查[6,8](@ref)
-              //  "${workspaceFolder}/src/bin/psdet_demo" // 原程序路径
-            //],
+           // "program": "${workspaceFolder}/src/bin/psdet_demo", // 原程序路径
+             "program": "/usr/local/cuda-12.6/compute-sanitizer/compute-sanitizer", // 工具路径
+             "args": [
+                "--tool=memcheck", // 启用内存检查[6,8](@ref)
+                "${workspaceFolder}/src/bin/psdet_demo" // 原程序路径
+            ],
             "preLaunchTask": "cmake",
             "miDebuggerPath": "/usr/bin/gdb",
             "cwd": "${workspaceFolder}"

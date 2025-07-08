@@ -145,7 +145,7 @@ bool PsDet::build(bool fp16) {
     }
 
     // 设置优化范围（使用用户配置的尺寸）
-    const Dims min_dims = Dims4{1, channels, input_height_ / 2, input_width_ / 2};
+    const Dims min_dims = Dims4{1, channels, 128, 128};
     const Dims opt_dims = Dims4{max_batch_size_, channels, input_height_, input_width_};
     const Dims max_dims = Dims4{max_batch_size_, channels, input_height_ * 2, input_width_ * 2};
 
@@ -223,96 +223,69 @@ bool PsDet::build(bool fp16) {
     logger_.log(ILogger::Severity::kINFO, ("Engine build complete and saved to "+engine_path_).c_str());
     return true;
 }
+
 bool PsDet::infer(const cv::Mat& image, 
                   std::vector<std::vector<KeyPoint>>& output_points, 
-                  std::vector<std::vector<ParkingSlot>>& output_slots) {
-    if (!engine_ || !context_) return false;
+                  std::vector<std::vector<ParkingSlot>>& output_slots) 
+{
+    // 0. 检查引擎和上下文状态
+    if (!engine_ || !context_) {
+        logger_.log(ILogger::Severity::kERROR, "Engine or context not initialized");
+        return false;
+    }
+
+    // 1. 获取张量名称（显式批处理模式要求使用名称而非索引）
+    const char* input_name = engine_->getIOTensorName(0);
+    const char* output_points_name = engine_->getIOTensorName(1);
+    const char* output_slots_name = engine_->getIOTensorName(2);
     
-    // 预处理
+    if (!input_name || !output_points_name || !output_slots_name) {
+        logger_.log(ILogger::Severity::kERROR, "Failed to get tensor names");
+        return false;
+    }
+
+    // 2. 预处理图像并拷贝到GPU
     preprocess(image, input_h_.data());
-    
-    // 数据传输
     cudaMemcpyAsync(input_d_, input_h_.data(), 
                    input_h_.size() * sizeof(float), 
                    cudaMemcpyHostToDevice, stream_);
-    
-    // 设置绑定
-    void* bindings[] = {input_d_, output_points_d_, output_slots_d_};
-    
-    // 使用显式批处理
-    if (!engine_->hasImplicitBatchDimension()) {
-        std::cout << "引擎支持显式批处理" << std::endl;
-        Dims4 input_dims{1, input_channels_, input_height_, input_width_};
-        context_->setInputShape(0, input_dims);
-    }
 
-    // 确保所有输入张量的形状和地址都已设置
-    for (int i = 0; i < engine_->getNbIOTensors(); ++i) {
-        const char* tensor_name = engine_->getIOTensorName(i);
-        if (engine_->getTensorIOMode(tensor_name) == nvinfer1::TensorIOMode::kINPUT) {
-            std::cout << "Setting shape and address for input tensor: " << tensor_name << std::endl;
-            context_->setInputShape(tensor_name, engine_->getTensorShape(tensor_name));
-            context_->setTensorAddress(tensor_name, bindings[i]);
-        }
-    }
-
-    // 执行推理
-    if (!context_->enqueueV3(stream_)) {
-        std::cerr << "Failed to enqueue inference" << std::endl;
+    // 3. 设置动态输入形状
+    nvinfer1::Dims input_dims = engine_->getTensorShape(input_name);
+    input_dims.d[0] = 1;  // 显式设置batch size=1
+    input_dims.d[2] = input_height_;
+    input_dims.d[3] = input_width_;
+    if (!context_->setInputShape(input_name, input_dims)) {
+        logger_.log(ILogger::Severity::kERROR, "Failed to set input shape");
         return false;
     }
-    
-    // 获取结果
+
+    // 4. 绑定所有张量地址（关键修复点）
+    void* bindings[] = {input_d_, output_points_d_, output_slots_d_};
+    context_->setTensorAddress(input_name, bindings[0]);
+    context_->setTensorAddress(output_points_name, bindings[1]);
+    context_->setTensorAddress(output_slots_name, bindings[2]);
+
+    // 5. 执行异步推理
+    if (!context_->enqueueV3(stream_)) {
+        logger_.log(ILogger::Severity::kERROR, "Inference enqueue failed");
+        return false;
+    }
+
+    // 6. 异步拷贝结果并同步流
     cudaMemcpyAsync(output_points_h_.data(), output_points_d_, 
-                   output_points_h_.size() * sizeof(float), 
+                   output_points_h_.size() * sizeof(float),
                    cudaMemcpyDeviceToHost, stream_);
     cudaMemcpyAsync(output_slots_h_.data(), output_slots_d_, 
-                   output_slots_h_.size() * sizeof(float), 
+                   output_slots_h_.size() * sizeof(float),
                    cudaMemcpyDeviceToHost, stream_);
-    
-    // 等待完成
     cudaStreamSynchronize(stream_);
 
-    // 在执行推理后添加 for debug comparison with pth demo.py
-    const char* input_name = engine_->getIOTensorName(0);  // 获取输入张量名称
-    Dims opt_dims = engine_->getTensorShape(input_name);
-    std::cout << "real inference Dims: ";
-    for (int i=0; i<opt_dims.nbDims; ++i) 
-    std::cout << opt_dims.d[i] << " ";
-    const char* output_points_name = engine_->getIOTensorName(1);  // 获取输出张量名称
-    Dims points_dims = engine_->getTensorShape(output_points_name);
-
-    const char* output_slots_name = engine_->getIOTensorName(2);  // 获取输出张量名称
-    Dims slots_dims = engine_->getTensorShape(output_slots_name);
-    std::cout << ">Points output dims: ";
-    for (int i = 0; i < points_dims.nbDims; ++i) 
-        std::cout << points_dims.d[i] << " ";
-    std::cout << "\nSlots output dims: ";
-    for (int i = 0; i < slots_dims.nbDims; ++i)
-        std::cout << slots_dims.d[i] << " ";
-
-    // 在保存输出文件前添加
-    float sum_points = std::accumulate(output_points_h_.begin(), output_points_h_.end(), 0.0f);
-    float sum_slots = std::accumulate(output_slots_h_.begin(), output_slots_h_.end(), 0.0f);
-    std::cout << "Points输出总和: " << sum_points << " | Slots输出总和: " << sum_slots;
-    
-    // 检查CUDA错误
-    cudaError_t error = cudaGetLastError();
-    if (error != cudaSuccess) {
-        std::cerr << "CUDA error: " << cudaGetErrorString(error) << std::endl;
-        return false;
-    }
-    cudaStreamSynchronize(stream_);
-
-    // 应该将output_points_h_，output_slots_h_分别转换成（3,16,16) 和 （128，16，16）的矩阵
-    
+    // 7. 后处理
     postprocess(output_points, output_slots);
-    
     return true;
 }
 
-
-// 加载引擎
 bool PsDet::load() {
     std::ifstream engine_file(engine_path_, std::ios::binary);
     if (!engine_file) return false;
