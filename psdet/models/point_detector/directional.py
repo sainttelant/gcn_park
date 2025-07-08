@@ -105,6 +105,13 @@ class PointDetector(nn.modules.Module):
         args = {'align_corners': True} if int(torch.__version__[2]) > 2 else {}
         descriptors = torch.nn.functional.grid_sample(
             descriptors, keypoints.view(b, 1, -1, 2), mode='bilinear', **args)
+        # 使用npsavetxt save descriptors into txt
+        import numpy as np
+        descriptors_2d = descriptors.cpu().numpy().reshape(descriptors.shape[0] * descriptors.shape[1], -1)
+        descriptors_2d = descriptors_2d.flatten()
+        np.savetxt('images/predictions/descriptors_after_grid_sample_python.txt', descriptors_2d,fmt='%.6f')
+        
+        
         descriptors = torch.nn.functional.normalize(
             descriptors.reshape(b, c, -1), p=2, dim=1)
         return descriptors

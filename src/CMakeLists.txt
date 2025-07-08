@@ -27,7 +27,7 @@ set(CUDA_LIB /usr/local/cuda-11.8/targets/x86_64-linux/lib/)
 # 包含TensorRT头文件
 include_directories(${TENSORRT_DIR}
     ${PROJECT_SOURCE_DIR}/include
-    #${PROJECT_SOURCE_DIR}/plugin/grid_sampler
+    ${PROJECT_SOURCE_DIR}/plugin/grid_sampler
     ${PROJECT_SOURCE_DIR}/plugin/simpleplugin
     ${PROJECT_SOURCE_DIR}/common
     ${OpenCV_INCLUDE_DIRS}
@@ -36,9 +36,9 @@ include_directories(${TENSORRT_DIR}
 
 # 编一个cuda的动态库出来 
 
-#file(GLOB Project_ops_src ${PROJECT_SOURCE_DIR}/plugin/simpleplugin/*.cu  ${PROJECT_SOURCE_DIR}/common/*.cu ${PROJECT_SOURCE_DIR}/common/*.cpp ${PROJECT_SOURCE_DIR}/plugin/grid_sampler/*.cu ${PROJECT_SOURCE_DIR}/plugin/grid_sampler/*.cpp ${PROJECT_SOURCE_DIR}/plugin/normalize/*.cu)
+file(GLOB Project_ops_src  ${PROJECT_SOURCE_DIR}/common/*.cu ${PROJECT_SOURCE_DIR}/common/*.cpp ${PROJECT_SOURCE_DIR}/plugin/grid_sampler/*.cu ${PROJECT_SOURCE_DIR}/plugin/grid_sampler/*.cpp  ${PROJECT_SOURCE_DIR}/plugin/simpleplugin/*.cu  ${PROJECT_SOURCE_DIR}/plugin/simpleplugin/normalize.cu)
 
-file(GLOB Project_ops_src ${PROJECT_SOURCE_DIR}/plugin/simpleplugin/*.cu)
+
 set(shared_target psdet_ops)
 
 cuda_add_library(${shared_target} SHARED ${Project_ops_src} OPTIONS -arch=sm_${ARCH})

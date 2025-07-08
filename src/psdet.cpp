@@ -1,5 +1,6 @@
 #include "psdet.hpp"
-#include "simpleplugin.h"
+#include "gridSamplerKernel.h"
+#include "normalize.h"
 #include <algorithm>
 #include <cassert>
 #include <numeric>  // 修复：添加 std::iota 所需的头文件
@@ -391,8 +392,6 @@ void PsDet::process_points(
             }
         }
     }
-
-
     // 应用改进的NMS
     auto nms_points = applyNMS(points, nms_thresh_);
     output_points.push_back(nms_points);
@@ -401,7 +400,7 @@ void PsDet::process_points(
 
 
 
-void PsDet::process_slots(
+/* void PsDet::process_slots(
      const std::vector<std::vector<KeyPoint>>& points_list, 
     const float* descriptor_map,
     std::vector<std::vector<ParkingSlot>>& output_slots,
@@ -412,8 +411,8 @@ void PsDet::process_slots(
     
     // 描述符图的尺寸信息
     const int desc_channels = 128;
-    const int desc_height = input_height_ / 4;
-    const int desc_width = input_width_ / 4;
+    const int desc_height = input_height_ / 32;
+    const int desc_width = input_width_ / 32;
     
 
     std::vector<KeyPoint> points_for_reserve;
@@ -432,8 +431,7 @@ void PsDet::process_slots(
             points_for_reserve[i].x = points_list[0][i].x;
             points_for_reserve[i].y = points_list[0][i].y;
         }
-    // 为每个批次处理槽位
-    for (int b = 0; b < batch_size; ++b) {
+   
        
         std::vector<ParkingSlot> batch_slots;
         
@@ -451,36 +449,82 @@ void PsDet::process_slots(
             grid_points.push_back(grid_x);
             grid_points.push_back(grid_y);
         }
-        
+       
+
+        int b = 1;
         // 在GPU上采样描述符
         const int num_points = points_for_reserve.size();
-        float* sampled_descriptors;
-        cudaMalloc((void**)&sampled_descriptors, 1 * 128*1*10 * sizeof(float));
+        float* sampled_descriptors= nullptr;
+        cudaError_t err =cudaMalloc((void**)&sampled_descriptors, 1*128*1*10*sizeof(float));
+        if (err != cudaSuccess) {
+            std::cerr << "CUDA error in cudaMalloc: " << cudaGetErrorString(err) << std::endl;
+        }
         
 
-        for (auto &point: grid_points) {
-            
-            printf("point: %f\n", point);
+        int input_dims[4] = {1, desc_channels, desc_height, desc_width}; // NCHW
+        int grid_dims[4] = {1, num_points, 1, 2}; // [batch, num_points, 1, 2]
+        int output_dims[4] = {1, desc_channels, num_points, 1}; // 输出维度
+
+        // 网格坐标范围检查
+        for (auto& coord : grid_points) {
+            if (coord < -1.0f || coord > 1.0f) {
+                std::cerr << "Invalid grid coordinate: " << coord 
+                        << " at index " << &coord - grid_points.data() << std::endl;
+                coord = std::clamp(coord, -1.0f, 1.0f);
+            }
         }
-        // 执行grid_sample
-        grid_sample_cuda(
-            &descriptor_map[1 * desc_channels * 16 * 16],
+
+        // 验证输入描述符维度
+        std::cout << "Descriptor map actual size: " 
+                << desc_height << "x" << desc_width << std::endl;
+        std::cout << "Grid points count: " << grid_points.size() << std::endl;
+        std::cout << "Expected grid points: " << num_points * 2 << std::endl;
+
+        // 验证输出空间
+        size_t required_mem = 1 * 128 * num_points * 1 * sizeof(float);
+        if (required_mem > 1 * 128 * 1 * 10*sizeof(float)) {
+            std::cerr << "Insufficient memory allocated! Required: " 
+                    << required_mem << ", Allocated: "
+                    << 1 * 128 * 1 * 10*sizeof(float) << std::endl;
+        }
+
+        // 调用grid_sample
+        grid_sample<float>(
+            sampled_descriptors, 
+            &descriptor_map[b * desc_channels * desc_height * desc_width],
             grid_points.data(),
-            sampled_descriptors,
-            num_points, desc_channels, 1, 10,
-            1, 1, true);
-        
+            output_dims,
+            input_dims,
+            grid_dims,
+            4, // 4维数据（2D采样）
+            GridSamplerInterpolation::Bilinear,
+            GridSamplerPadding::Zeros,
+            true, // align_corners
+            stream_ // 使用类的CUDA流
+        );
+
+        cudaStreamSynchronize(stream_); // 等待内核完成
+        cudaError_t err_grid = cudaGetLastError(); // 检查内核错误
+
+        // 增强错误检查
+        if (err_grid != cudaSuccess) {
+            std::cerr << "CUDA error in grid_sample: " 
+                    << cudaGetErrorString(err_grid) 
+                    << " (Code: " << err_grid << ")" << std::endl;
+            
+            // 特定错误处理
+            if (err_grid == cudaErrorInvalidValue) {
+                std::cerr << "Likely cause: Invalid grid coordinates" << std::endl;
+            } else if (err_grid == cudaErrorIllegalAddress) {
+                std::cerr << "Likely cause: Memory access violation" << std::endl;
+            }
+        }
+                
         // 归一化描述符
         normalize_cuda(sampled_descriptors, num_points, desc_channels, 2.0f, 1e-5f);
         
         // 2. 构建数据字典（模拟Python的data_dict）
-        struct SlotData {
-            std::vector<float> descriptors;
-            std::vector<KeyPoint> points;
-            std::vector<float> slant_pred;
-            std::vector<float> vacant_pred;
-            std::vector<float> edge_pred;
-        };
+      
         
         SlotData data_dict;
         
@@ -514,7 +558,15 @@ void PsDet::process_slots(
         if (cfg_.use_gnn) {
             // 实际应用中应调用GNN模型
             // 这里简化处理：添加随机噪声
+            printf("data_dict.descriptors size is: %d\n", data_dict.descriptors.size());
+            // 将data_dict.descriptors 的结果写入txt文件,小数点6位精度
+            std::ofstream f("images/predictions/descriptors_after_grid_sample_cpp.txt");
+            for (float val : data_dict.descriptors) {
+                f << std::endl;
+                f << std::fixed << std::setprecision(6) << val << " ";
+            }
             for (float& val : data_dict.descriptors) {
+
                 val += (static_cast<float>(rand()) / RAND_MAX - 0.5f) * 0.1f;
             }
         }
@@ -552,10 +604,198 @@ void PsDet::process_slots(
         }
         
         // 7. 清理资源
-        cudaFree(sampled_descriptors);
+        if (sampled_descriptors == nullptr) {
+            std::cerr << "Pointer is null!" << std::endl;
+        }
+        cudaError_t err_free =  cudaFree(sampled_descriptors);
+       if (err_free != cudaSuccess) {
+            std::cerr << "Error freeing sampled_descriptors: " 
+                    << cudaGetErrorString(err_free) << " (Code: " << err_free << ")" << std::endl;
+        }
+        sampled_descriptors = nullptr;
         output_slots[b] = batch_slots;
+    
+} */
+
+ void PsDet::process_slots(
+    const std::vector<std::vector<KeyPoint>>& points_list, 
+    const float* descriptor_map,
+    std::vector<std::vector<ParkingSlot>>& output_slots,
+    int batch_size)
+{
+    output_slots.clear();
+    output_slots.resize(batch_size);  // 确保有足够的batch空间
+    
+    // 描述符图的尺寸信息
+    const int desc_channels = 128;
+    const int desc_height = input_height_ / 32;
+    const int desc_width = input_width_ / 32;
+    
+    // 检查描述符图尺寸合法性
+    if (desc_height <= 0 || desc_width <= 0) {
+        std::cerr << "Invalid descriptor map dimensions: " 
+                 << desc_height << "x" << desc_width << std::endl;
+        return;
+    }
+
+    std::cout << "Descriptor map dimensions: " << desc_height << "x" << desc_width << std::endl;
+
+    // 批处理循环
+    for (int b = 0; b < batch_size; ++b) {
+        std::cout << "Processing batch: " << b << std::endl;
+
+        // 1. 准备实际关键点（跳过固定大小的points_for_reserve）
+        const auto& actual_points = points_list[b];
+        const int num_points = actual_points.size();
+        
+        std::cout << "Number of points in batch " << b << ": " << num_points << std::endl;
+
+        // 跳过空点集
+        if (num_points == 0) {
+            std::cout << "No points in batch " << b << ", skipping." << std::endl;
+            continue;
+        }
+
+        std::vector<ParkingSlot> batch_slots;
+        std::vector<float> grid_points;
+        grid_points.reserve(num_points * 2);  // 动态分配实际所需空间
+
+        // 2. 准备网格坐标并确保在[-1,1]范围内
+        for (const auto& kp : actual_points) {
+            float grid_x = std::clamp(kp.x * 2 - 1, -1.0f, 1.0f);
+            float grid_y = std::clamp(kp.y * 2 - 1, -1.0f, 1.0f);
+            grid_points.push_back(grid_x);
+            grid_points.push_back(grid_y);
+        }
+
+        for (auto& coord : grid_points) {
+            coord = std::clamp(coord, -1.0f, 1.0f);
+        }
+
+        std::cout << "Grid points prepared for batch " << b << ": " << grid_points.size() / 2 << " pairs" << std::endl;
+
+        // 3. GPU描述符采样
+        float* sampled_descriptors = nullptr;
+       
+        // 设置张量维度
+        int input_dims[4] = {1, desc_channels, desc_height, desc_width};
+        int grid_dims[4] = {1, num_points, 1, 2}; // [N, H_out, W_out, 2]
+
+        int output_dims[4] = {1, desc_channels, 1, num_points}; // [N, C, H_out, W_out]
+
+        printf("Input dims: %d %d %d %d\n", input_dims[0], input_dims[1], input_dims[2], input_dims[3]);
+        printf("Grid dims: %d %d %d %d\n", grid_dims[0], grid_dims[1], grid_dims[2], grid_dims[3]);
+        printf("Output dims: %d %d %d %d\n", output_dims[0], output_dims[1], output_dims[2], output_dims[3]);
+
+        size_t required_mem = output_dims[0] * output_dims[1] * output_dims[2] * output_dims[3] * sizeof(float);
+        cudaError_t err = cudaMalloc(&sampled_descriptors, required_mem);
+        
+        if (err != cudaSuccess) {
+            std::cerr << "CUDA malloc error: " << cudaGetErrorString(err)
+                     << " | Size: " << (required_mem / 1024) << " KB" << std::endl;
+            continue;  // 跳过当前batch
+        }
+
+        std::cout << "Memory allocated for sampled descriptors: " << required_mem / 1024 << " KB" << std::endl;
+        
+        if (descriptor_map == nullptr) {
+            std::cerr << "Descriptor map pointer is null!" << std::endl;
+            return;
+        }
+
+        
+        // 分配设备内存
+        float* d_grid_points = nullptr;
+        size_t grid_bytes = num_points * 2 * sizeof(float); // 确保32字节
+        cudaMalloc(&d_grid_points, grid_bytes);
+        cudaMemcpyAsync(d_grid_points, grid_points.data(), grid_bytes, 
+                            cudaMemcpyHostToDevice, stream_);
+        
+        printf("before grid sample <<<<<<<<<<<<<<<<<<<<<<<\n");
+        // 调用grid_sample内核
+        grid_sample<float>(
+            sampled_descriptors, 
+            &descriptor_map[b * desc_channels * desc_height * desc_width],
+            d_grid_points,
+            output_dims,
+            input_dims,
+            grid_dims,
+            4,
+            GridSamplerInterpolation::Bilinear,
+            GridSamplerPadding::Zeros,
+            true,
+            stream_
+        );
+
+        // 检查内核执行错误
+        cudaStreamSynchronize(stream_);
+        cudaError_t err_sample = cudaGetLastError();
+        if (err_sample != cudaSuccess) {
+            std::cerr << "CUDA error: " << cudaGetErrorString(err_sample) 
+                    << " at " << __FILE__ << ":" << __LINE__ << std::endl;
+            exit(EXIT_FAILURE);
+        }
+
+        std::cout << "Grid sampling completed for batch " << b << std::endl;
+
+        // 4. 归一化描述符
+        normalize_cuda(sampled_descriptors, num_points, desc_channels, 2.0f, 1e-5f);
+        std::cout << "Normalization completed for batch " << b << std::endl;
+
+        // 5. 构建数据字典
+        SlotData data_dict;
+        data_dict.descriptors.resize(num_points * desc_channels);
+        cudaMemcpy(data_dict.descriptors.data(), sampled_descriptors, 
+                  required_mem, cudaMemcpyDeviceToHost);
+        data_dict.points = actual_points;
+
+        std::cout << "Descriptors copied back to host for batch " << b << std::endl;
+
+        // 6. 边缘预测 - 仅连接实际点
+        const float connection_threshold = 0.05f;
+        for (size_t i = 0; i < num_points; ++i) {
+            for (size_t j = i + 1; j < num_points; ++j) {
+                const auto& p1 = actual_points[i];
+                const auto& p2 = actual_points[j];
+                
+                float dx = p1.x - p2.x;
+                float dy = p1.y - p2.y;
+                float dist_sq = dx * dx + dy * dy;
+                
+                if (dist_sq < connection_threshold * connection_threshold) {
+                    float conf = (p1.conf + p2.conf) * 0.5f * 
+                                (1.0f - sqrt(dist_sq) / connection_threshold);
+                    
+                    if (conf > slot_thresh_) {
+                        ParkingSlot slot;
+                        slot.confidence = conf;
+                        slot.coords = {p1.x, p1.y, p2.x, p2.y}; 
+                        batch_slots.push_back(slot);
+                    }
+                }
+            }
+        }
+        
+        std::cout << "Slots processed for batch " << b << ": " << batch_slots.size() << " slots found" << std::endl;
+
+        // 7. 资源清理
+        cudaError_t free_err = cudaFree(sampled_descriptors);
+        if (free_err != cudaSuccess) {
+            std::cerr << "cudaFree error: " << cudaGetErrorString(free_err)
+                     << " | Batch: " << b << std::endl;
+        }
+
+        cudaError_t free_err2 = cudaFree(d_grid_points);
+        if (free_err2 != cudaSuccess) {
+            std::cerr << "cudaFree error: " << cudaGetErrorString(free_err2)
+                     << " | Batch: " << b << std::endl;
+        }
+        
+        output_slots[b] = std::move(batch_slots);  // 移动语义提高效率
     }
 }
+
+
 
 // 修改后的后处理函数
 void PsDet::postprocess(std::vector<std::vector<KeyPoint>>& output_points,

@@ -1,22 +1,20 @@
 {
     "version": "0.2.0",
     "configurations": [
-        
         {
-            "name": "Python: Run demo.py",
-            "type": "python",
+            "name": "Run with Compute Sanitizer",
+            "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/tools/demo.py",
-            "args": ["-c", "config/ps_gat.yaml", "-m", "checkpoint_epoch_200.pth"],
-            //"program": "${workspaceFolder}/tools/train.py",
-            //"args": ["-c", "config/ps_gat.yaml"],
-            //"program": "${workspaceFolder}/tools/CompareThreeNew.py",
-            //"args": ["-c", "config/ps_gat.yaml", "-m", "checkpoint_epoch_200.pth"],
-
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "console": "integratedTerminal",
-            "pythonPath": "/root/anaconda3/envs/gcn_slots/bin/python"
+            //"program": "${workspaceFolder}/src/bin/psdet_demo", // 原程序路径
+             "program": "/usr/local/cuda-11.8/compute-sanitizer/compute-sanitizer", // 工具路径
+             "args": [
+                "--tool=memcheck", // 启用内存检查[6,8](@ref)
+                "${workspaceFolder}/src/bin/psdet_demo" // 原程序路径
+            ],
+            "preLaunchTask": "cmake",
+            "miDebuggerPath": "/usr/bin/gdb",
+            "cwd": "${workspaceFolder}"
         }
     ]
+}
+

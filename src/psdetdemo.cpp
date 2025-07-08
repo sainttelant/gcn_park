@@ -117,8 +117,9 @@ int main() {
     // 初始化检测器
     psdet::PsDet detector(onnx_path, engine_path, 1, max_points_original, max_slots_original, input_width, input_height);
     
+    bool loaded = detector.load();
     // 构建或加载引擎
-    if (!detector.load()) {
+    if (!loaded) {
         std::cout << "构建TensorRT引擎..." << std::endl;
         if (!detector.build(true)) {
             std::cerr << "引擎构建失败!" << std::endl;
@@ -128,7 +129,7 @@ int main() {
             std::cerr << "引擎加载失败!" << std::endl;
             return 1;
         }
-    }
+    } 
     
     // 遍历处理每张图片
     for (const auto& img_path : image_paths) {

@@ -74,6 +74,15 @@ public:
                          const std::vector<std::vector<ParkingSlot>>& slots);
     
 
+       struct SlotData {
+            std::vector<float> descriptors;
+            std::vector<KeyPoint> points;
+            std::vector<float> slant_pred;
+            std::vector<float> vacant_pred;
+            std::vector<float> edge_pred;
+        };
+
+
 private:
     Logger logger_;
     IRuntime* runtime_ = nullptr;
