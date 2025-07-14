@@ -192,6 +192,8 @@ class PointDetector(nn.modules.Module):
             with open ('images/predictions/output_points_python.txt', 'a') as f:
                 np.savetxt(f, points_full, delimiter=' ', fmt="%.6f")
             pred_dict = self.predict_slots(descriptor_map[b].unsqueeze(0), torch.Tensor(points_full).unsqueeze(0).cuda())
+           
+           
             edges = pred_dict['edges_pred'][0]
             n = points_np.shape[0]
             m = points_full.shape[0]

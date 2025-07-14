@@ -774,8 +774,14 @@ void PsDet::process_points(
         size_t out_normalized_d_bytes = num_points * desc_channels * sizeof(float);
         cudaMalloc((void**)&out_normalized_d, out_normalized_d_bytes);
          
-       cuda_normalize<float>(sampled_descriptors, out_normalized_d, \
-           num_points,num_points*desc_channels, out_normalized_d_bytes, 2.0f, 1e-12f, stream_); 
+       cuda_normalize<float>(sampled_descriptors, 
+        out_normalized_d, 
+        num_points,
+        desc_channels,
+        desc_channels,
+        1e-12f,
+        stream_);
+           
         cudaStreamSynchronize(stream_);
 
         // 5. 构建数据字典
