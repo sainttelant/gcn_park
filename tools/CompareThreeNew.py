@@ -253,8 +253,8 @@ def export_model_to_onnx(model, cfg, device_id=0):
         simplified_model, check = simplify(onnx_model)
         onnx.save(simplified_model, simplified_path/"model_simplified.onnx")
         print(f"ONNX模型简化完成，保存到: {simplified_path}")
-        """
-        model = onnx.load(simplified_path/"model_simplified.onnx")
+        
+        model = onnx.load(simplified_path/"model.onnx")
         for input in model.graph.input:
             if input.name == "image":  # 替换为你的输入名称
                 # 清除动态维度标记
@@ -262,7 +262,7 @@ def export_model_to_onnx(model, cfg, device_id=0):
                 input.type.tensor_type.shape.dim[2].dim_value = 512  # height
                 input.type.tensor_type.shape.dim[3].dim_value = 512  # width
         onnx.save(model, simplified_path/"fixed_model.onnx")
-        """
+        
     except ImportError:
         print("警告: onnx-simplifier 未安装，跳过模型简化步骤")
     except Exception as e:

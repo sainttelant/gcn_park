@@ -1,77 +1,70 @@
 cmake_minimum_required(VERSION 3.14)
-project(ParkingSlotDetection)
+project(ParkingSlotDetection LANGUAGES CXX CUDA)  # 声明CUDA语言
 
 set(CMAKE_CXX_STANDARD 17)
+set(ARCH 89)  # Tesla A100/Ada架构
 
-set(ARCH 89)  # 设置GPU架构 for ada5000 gpu
-
+# 构建配置
 set(CMAKE_BUILD_TYPE "Debug")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O0")  # 合并标志
+set(CMAKE_CUDA_ARCHITECTURES ${ARCH})  # 现代GPU架构设置[4](@ref)
 
-# 添加下面的行为了禁止优化
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0")
-
-# 查找OpenCV
+# 依赖查找
 find_package(OpenCV REQUIRED)
-find_package(CUDA REQUIRED)
+find_package(CUDAToolkit REQUIRED)  # 现代CUDA查找[5](@ref)
 
-include_directories(${OpenCV_INCLUDE_DIRS})
 
-message("OpenCV_INCLUDE_DIRS: ${OpenCV_INCLUDE_DIRS}")
+# TensorRT路径
+set(TENSORRT_DIR /usr/include/x86_64-linux-gnu)
+set(Tensorrt_LIB /usr/lib/x86_64-linux-gnu)
 
-# 设置TensorRT路径
-set(TENSORRT_DIR /usr/include/x86_64-linux-gnu)  # 替换为实际路径
-set(Tensorrt_LIB /usr/lib/x86_64-linux-gnu)  # 替换为实际路径
-set(CUDA_DIR /usr/local/cuda-11.8/targets/x86_64-linux/include/)
-set(CUDA_LIB /usr/local/cuda-11.8/targets/x86_64-linux/lib/)
-# 包含TensorRT头文件
-include_directories(${TENSORRT_DIR}
+
+
+# 源文件集合
+file(GLOB Project_ops_src  
+    ${PROJECT_SOURCE_DIR}/common/*.cu 
+    ${PROJECT_SOURCE_DIR}/common/*.cpp 
+    ${PROJECT_SOURCE_DIR}/plugin/grid_sampler/*.cu 
+    #${PROJECT_SOURCE_DIR}/plugin/grid_sampler/*.cpp  
+    ${PROJECT_SOURCE_DIR}/plugin/simpleplugin/*.cu  
+)
+
+# message 所有源文件
+message(STATUS "Project_ops_src: ${Project_ops_src}")
+
+# CUDA动态库
+set(shared_target psdet_ops)
+add_library(${shared_target} SHARED ${Project_ops_src})
+target_link_libraries(${shared_target} PUBLIC 
+    CUDA::cudart
+)
+target_include_directories(${shared_target} PUBLIC
+    ${TENSORRT_DIR}
     ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/common
+    ${PROJECT_SOURCE_DIR}/plugin
     ${PROJECT_SOURCE_DIR}/plugin/grid_sampler
     ${PROJECT_SOURCE_DIR}/plugin/simpleplugin
-    ${PROJECT_SOURCE_DIR}/common
     ${OpenCV_INCLUDE_DIRS}
-    ${CUDA_DIR}
 )
 
-# 编一个cuda的动态库出来 
-
-file(GLOB Project_ops_src  ${PROJECT_SOURCE_DIR}/common/*.cu ${PROJECT_SOURCE_DIR}/common/*.cpp ${PROJECT_SOURCE_DIR}/plugin/grid_sampler/*.cu ${PROJECT_SOURCE_DIR}/plugin/grid_sampler/*.cpp  ${PROJECT_SOURCE_DIR}/plugin/simpleplugin/*.cu  ${PROJECT_SOURCE_DIR}/plugin/simpleplugin/normalize.cu)
-
-
-set(shared_target psdet_ops)
-
-cuda_add_library(${shared_target} SHARED ${Project_ops_src} OPTIONS -arch=sm_${ARCH})
-
-install (
-    TARGETS ${shared_target}
-    LIBRARY DESTINATION lib
+target_link_directories(${shared_target} PUBLIC
+    ${Tensorrt_LIB}
 )
 
-
-
-message("TensorRT_DIR: ${TENSORRT_DIR}")
-message("project source dir: ${PROJECT_SOURCE_DIR}")
-# 链接TensorRT库
-link_directories(${Tensorrt_LIB} 
-${CUDA_LIB}
-)
-
-# 添加可执行文件
+# 可执行文件
 add_executable(psdet_demo 
     psdetdemo.cpp 
     psdet.cpp
 )
-
-# 链接库
-target_link_libraries(psdet_demo 
+target_link_libraries(psdet_demo PRIVATE
     ${OpenCV_LIBS}
     nvinfer
     nvonnxparser
-    cudart
-    psdet_ops 
-    cuda
+    ${shared_target}
+    CUDA::cudart  # 关键添加项
 )
 
-# 设置输出目录
+# 安装配置
+install(TARGETS ${shared_target} LIBRARY DESTINATION lib)
 set(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)

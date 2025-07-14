@@ -103,8 +103,11 @@ class PointDetector(nn.modules.Module):
         b, c, h, w = descriptors.shape
         keypoints = keypoints * 2 - 1  # normalize to (-1, 1)
         args = {'align_corners': True} if int(torch.__version__[2]) > 2 else {}
+        
+        
         descriptors = torch.nn.functional.grid_sample(
             descriptors, keypoints.view(b, 1, -1, 2), mode='bilinear', **args)
+
         # 使用npsavetxt save descriptors into txt
         import numpy as np
         descriptors_2d = descriptors.cpu().numpy().reshape(descriptors.shape[0] * descriptors.shape[1], -1)
@@ -114,6 +117,9 @@ class PointDetector(nn.modules.Module):
         
         descriptors = torch.nn.functional.normalize(
             descriptors.reshape(b, c, -1), p=2, dim=1)
+        descriptors_cpu = descriptors.cpu().numpy().reshape(b, c, -1)
+        descriptors_cpu = descriptors_cpu.flatten()
+        np.savetxt('images/predictions/descriptors_after_normalize_python.txt', descriptors_cpu,fmt='%.6f')
         return descriptors
 
     def get_targets_points(self, data_dict):
@@ -157,6 +163,8 @@ class PointDetector(nn.modules.Module):
   
         
         for b, marks in enumerate(points_pred):
+            print('marks.shape:',marks.shape)
+            print("b:",b)
             points_pred = get_predicted_points(marks, self.cfg.point_thresh, self.cfg.boundary_thresh)
 
             for i in range(len(points_pred)):
@@ -165,10 +173,10 @@ class PointDetector(nn.modules.Module):
                 x_val = points_pred[i][1][0]
                 y_val = points_pred[i][1][1]
 
-                output_data = np.column_stack((score, x_val, y_val))
+                #output_data = np.column_stack((score, x_val, y_val))
                 # 将数组写入文件
-                with open('images/predictions/output_points_python.txt', 'a') as f:
-                    np.savetxt(f, output_data, delimiter=' ', fmt="%.6f")
+                #with open('images/predictions/output_points_python.txt', 'a') as f:
+                    #np.savetxt(f, output_data, delimiter=' ', fmt="%.6f")
             points_pred_batch.append(points_pred)
          
             if len(points_pred) > 0:
@@ -181,6 +189,8 @@ class PointDetector(nn.modules.Module):
                 points_full[:len(points_pred)] = points_np
             else:
                 points_full = points_np
+            with open ('images/predictions/output_points_python.txt', 'a') as f:
+                np.savetxt(f, points_full, delimiter=' ', fmt="%.6f")
             pred_dict = self.predict_slots(descriptor_map[b].unsqueeze(0), torch.Tensor(points_full).unsqueeze(0).cuda())
             edges = pred_dict['edges_pred'][0]
             n = points_np.shape[0]
