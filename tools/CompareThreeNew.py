@@ -150,6 +150,67 @@ class TensorRTEngineValidator:
         for buf in self.inputs + self.outputs:
             if 'device' in buf and buf['device']:
                 buf['device'].free()
+                
+def export_gnn_edge_model(model, cfg, device_id=0):
+    device = torch.device(f'cuda:{device_id}')
+    
+    # GNN边预测模型包装器
+    class GNNEdgeWrapper(torch.nn.Module):
+  
+        def __init__(self, graph_encoder, edge_predictor):
+            super().__init__()
+            self.graph_encoder = graph_encoder
+            self.edge_predictor = edge_predictor
+            
+        def forward(self, descriptors, points):
+            data_dict = {
+                'descriptors': descriptors,
+                'points': points[:, :, :2]  # 仅取xy坐标[6](@ref)
+            }
+            
+            # 处理GNN分支
+            if self.graph_encoder is not None:
+                data_dict = self.graph_encoder(data_dict)
+                graph_output = data_dict['descriptors']
+            else:
+                graph_output = descriptors
+            
+            # 边预测
+            data_dict = self.edge_predictor(data_dict)
+            return graph_output, data_dict['edges_pred']
+        
+        # 创建模型实例
+        # 创建包装器实例
+    submodel = GNNEdgeWrapper(
+        graph_encoder=model.model.graph_encoder if cfg.use_gnn else None,
+        edge_predictor=model.model.edge_predictor  # 修正属性路径[1](@ref)
+    ).to(device)
+    submodel.eval()
+        
+        # 其余代码保持不变...
+    gnn_out_dim = cfg.model.graph_encoder.gnn.proj_dim
+    B, N = 1, cfg.model.max_points
+    dummy_desc = torch.randn(B, gnn_out_dim, N).to(device)  # [1, 64, 10]
+    dummy_points = torch.rand(B, N, 2).to(device)     
+        
+        # 导出ONNX
+    torch.onnx.export(
+            submodel,
+            (dummy_desc, dummy_points),
+            str(Path(cfg.save_onnx_dir) / "gnn_edge_model.onnx"),
+            export_params=True,
+            opset_version=14,
+            input_names=['descriptors', 'points'],
+            output_names=['graph_output', 'edge_pred'],
+            dynamic_axes={
+                'descriptors': {0: 'batch_size', 2: 'num_points'},
+                'points': {0: 'batch_size', 1: 'num_points'},
+                'graph_output': {0: 'batch_size', 2: 'num_points'},
+                'edge_pred': {0: 'batch_size', 2: 'num_edges'}
+        }
+    )
+    print(f"GNN边预测模型已导出到 {cfg.save_onnx_dir/'gnn_edge_model.onnx'}")
+
 
 def export_model_to_onnx(model, cfg, device_id=0):
     # 设置使用的设备
@@ -193,7 +254,8 @@ def export_model_to_onnx(model, cfg, device_id=0):
         def forward(self, image):
             input_dict = {'image': image}
             data_dict = self.model(input_dict)
-            points_pred = data_dict['points_pred']
+            points_pred = data_dict['points_pred']     
+           
 
             if 'descriptor_map' in data_dict:
                 descriptor_map = data_dict['descriptor_map']
@@ -216,6 +278,7 @@ def export_model_to_onnx(model, cfg, device_id=0):
         points_pred, descriptor_map = wrapped_model(image_tensor)
         print(f"points_pred shape: {points_pred.shape}")
         print(f"descriptor_map shape: {descriptor_map.shape}")
+       
 
     # 导出模型到 ONNX 格式
     torch.onnx.export(
@@ -390,4 +453,5 @@ if __name__ == '__main__':
     device = torch.device('cuda:0')
     model.to(device)
 
-    export_model_to_onnx(model, cfg, device_id=0)
+    #export_model_to_onnx(model, cfg, device_id=0)
+    export_gnn_edge_model(model, cfg, device_id=0)

@@ -7,6 +7,16 @@ from .gcn import GCNEncoder, EdgePredictor
 from .post_process import calc_point_squre_dist, pass_through_third_point
 from .post_process import get_predicted_points, get_predicted_directional_points, pair_marking_points
 from .utils import define_halve_unit, define_detector_block, YetAnotherDarknet, vgg16, resnet18, resnet50
+from copy import deepcopy
+class PermissiveDict(dict):
+    """支持属性访问的字典类型"""
+    def __getattr__(self, name):
+        if name in self:
+            return self[name]
+        raise AttributeError(f"No such attribute: {name}")
+    
+    def __setattr__(self, name, value):
+        self[name] = value
 
 class PointDetector(nn.modules.Module):
     """Detector for point without direction."""
@@ -45,10 +55,21 @@ class PointDetector(nn.modules.Module):
                                         kernel_size=1, stride=1, padding=0, bias=False)]
         self.descriptor_map = nn.Sequential(*layers_descriptor)
 
+        
+        base_dim = cfg.descriptor_dim
         if cfg.use_gnn:
             self.graph_encoder = GCNEncoder(cfg.graph_encoder)
+            gnn_out_dim = cfg.graph_encoder.gnn.proj_dim
+        else:
+            gnn_out_dim = base_dim
+        
+  
+        edge_cfg = PermissiveDict(cfg.edge_predictor.copy())  # 创建新实例
+        edge_cfg.input_dim = 2 * gnn_out_dim  # 设置正确输入维度
 
-        self.edge_predictor = EdgePredictor(cfg.edge_predictor)
+        # 修复2: 使用正确的变量名
+        print(f"GNN输出维度: {gnn_out_dim}, EdgePredictor输入维度: {edge_cfg.input_dim}")
+        self.edge_predictor = EdgePredictor(edge_cfg)  # 使用edge_cfg而非cfg.edge_cfg
 
         if cfg.get('slant_predictor', None):
             self.slant_predictor = EdgePredictor(cfg.slant_predictor)
@@ -73,6 +94,7 @@ class PointDetector(nn.modules.Module):
             data_dict.update(pred_dict)
         else:
             data_dict['descriptor_map'] = descriptor_map
+            #data_dict['']
 
         return data_dict
 

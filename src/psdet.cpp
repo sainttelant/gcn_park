@@ -849,6 +849,17 @@ void PsDet::process_points(
         descriptor_map_gpu = nullptr;
         
         output_slots[b] = std::move(batch_slots);  
+
+        for (auto res: output_slots[b]) {
+            
+            std::cout << res.coords[0] << " " << res.coords[1] << " " << res.coords[2] << " " << res.coords[3] << std::endl;
+            std::cout << res.confidence << std::endl;
+
+        }
+
+
+
+
     }
 }
 
