@@ -153,7 +153,7 @@ class TensorRTEngineValidator:
                 
 def export_gnn_edge_model(model, cfg, device_id=0):
     device = torch.device(f'cuda:{device_id}')
-    
+    onnx_model_path = cfg.save_onnx_dir
     # GNN边预测模型包装器
     class GNNEdgeWrapper(torch.nn.Module):
   
@@ -192,24 +192,25 @@ def export_gnn_edge_model(model, cfg, device_id=0):
     B, N = 1, cfg.model.max_points
     dummy_desc = torch.randn(B, gnn_out_dim, N).to(device)  # [1, 64, 10]
     dummy_points = torch.rand(B, N, 2).to(device)     
-        
+    print(f"输入维度: descriptors={dummy_desc.shape}, points={dummy_points.shape}")    
+    
         # 导出ONNX
+    dynamic_axes = {
+        'descriptors': {0: 'batch_size', 2: 'num_points'},
+        'points': {0: 'batch_size', 1: 'num_points'},
+        'edge_pred': {0: 'batch_size', 2: 'num_edges'}
+    }
+    
     torch.onnx.export(
-            submodel,
-            (dummy_desc, dummy_points),
-            str(Path(cfg.save_onnx_dir) / "gnn_edge_model.onnx"),
-            export_params=True,
-            opset_version=14,
-            input_names=['descriptors', 'points'],
-            output_names=['graph_output', 'edge_pred'],
-            dynamic_axes={
-                'descriptors': {0: 'batch_size', 2: 'num_points'},
-                'points': {0: 'batch_size', 1: 'num_points'},
-                'graph_output': {0: 'batch_size', 2: 'num_points'},
-                'edge_pred': {0: 'batch_size', 2: 'num_edges'}
-        }
+        submodel, 
+        (dummy_desc, dummy_points),
+        onnx_model_path/"gnn_model.onnx",
+        input_names=['descriptors', 'points'],
+        output_names=['graph_output', 'edge_pred'],
+        opset_version=14,
+        dynamic_axes=dynamic_axes
     )
-    print(f"GNN边预测模型已导出到 {cfg.save_onnx_dir/'gnn_edge_model.onnx'}")
+    print(f"GNN边预测模型已导出到 {cfg.save_onnx_dir/'gnn_model.onnx'}")
 
 
 def export_model_to_onnx(model, cfg, device_id=0):
