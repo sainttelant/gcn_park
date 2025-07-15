@@ -162,10 +162,9 @@ def export_gnn_edge_model(model, cfg, device_id=0):
             self.graph_encoder = graph_encoder
             self.edge_predictor = edge_predictor
             
-        def forward(self, descriptors, points):
+        def forward(self, descriptors):
             data_dict = {
-                'descriptors': descriptors,
-                'points': points[:, :, :2]  # 仅取xy坐标[6](@ref)
+                'descriptors': descriptors 
             }
             
             # 处理GNN分支
@@ -203,15 +202,16 @@ def export_gnn_edge_model(model, cfg, device_id=0):
     
     torch.onnx.export(
         submodel, 
-        (dummy_desc, dummy_points),
+        dummy_desc,
         onnx_model_path/"gnn_model.onnx",
-        input_names=['descriptors', 'points'],
+        input_names=['descriptors'],
         output_names=['graph_output', 'edge_pred'],
         opset_version=14,
         dynamic_axes=dynamic_axes
     )
     print(f"GNN边预测模型已导出到 {cfg.save_onnx_dir/'gnn_model.onnx'}")
-
+    model = onnx.load("cache/ps_gat/100/output_onnx/gnn_model.onnx")
+    print("输入节点名称:", [input.name for input in model.graph.input])
 
 def export_model_to_onnx(model, cfg, device_id=0):
     # 设置使用的设备

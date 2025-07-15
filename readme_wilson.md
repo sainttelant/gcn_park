@@ -42,4 +42,14 @@ trtexec --onnx=cache/ps_gat/100/output_onnx/model.onnx \
         --maxShapes=image:1x3x1024x1024 \
         >> trtexec_log.txt
 
+# trtexec convert gnn onnx 
+trtexec --onnx=cache/ps_gat/100/output_onnx/gnn_model.onnx \
+        --dumpLayerInfo \
+        --saveEngine=cache/ps_gat/100/output_onnx/gnn_new.engine \
+        --verbose \
+        --minShapes=descriptors:1x64x10 \
+        --optShapes=descriptors:1x64x50 \
+        --maxShapes=descriptors:1x64x100 \
+        >> trtexec_gnn_log.txt
+
 
