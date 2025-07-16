@@ -797,6 +797,15 @@ void PsDet::process_points(
         // 5. 构建数据字典
         SlotData data_dict;
         data_dict.descriptors.resize(num_points * desc_channels);
+        data_dict.points.resize(2*num_points);   // 成对出现的。所以乘以2
+
+        // 6.从point_lists中将点放到data_dict.points中
+        for (int i = 0; i < num_points; i++) {
+            data_dict.points[2*i].x = actual_points[i].x;
+            data_dict.points[2*i+1].y = actual_points[i].y;
+        }
+
+
         cudaMemcpy(data_dict.descriptors.data(), out_normalized_d, 
                   required_mem, cudaMemcpyDeviceToHost);
 
@@ -816,46 +825,49 @@ void PsDet::process_points(
             // ===== 新增：GNN模型推理 =====
         // 1. 准备GNN输入数据 (descriptors)
         //const int num_points = actual_points.size();
-        const int desc_channels = 128;
-        
+          
         // 将描述符数据转换为GNN模型需要的格式 [1, 128, num_points]
-        gnn_input_h_.resize(1 * desc_channels * num_points);
+        for (int c = 0; c < desc_channels; ++c) {
         for (int p = 0; p < num_points; ++p) {
-            for (int c = 0; c < desc_channels; ++c) {
-                gnn_input_h_[p * desc_channels + c] = data_dict.descriptors[p * desc_channels + c];;
-            }
+            gnn_input_h_[c * num_points + p] = data_dict.descriptors[p * desc_channels + c];
+        }
         }
         
         // 2. 传输数据到设备
-        cudaMemcpyAsync(gnn_input_d_, gnn_input_h_.data(), 
-                    gnn_input_h_.size() * sizeof(float),
-                    cudaMemcpyHostToDevice, stream_);
+        // 确保拷贝尺寸与目标缓冲区一致
+            size_t required_bytes = gnn_input_h_.size() * sizeof(float);
+            cudaMemcpyAsync(gnn_input_d_, gnn_input_h_.data(), 
+                            required_bytes, // 显式指定字节数
+                            cudaMemcpyHostToDevice, stream_);
+        
+            // 添加边界检查
+            if (gnn_input_d_ == nullptr || required_bytes > 9999999999) {
+            std::cerr << "非法内存访问：设备指针=" << gnn_input_d_ 
+                        << " 申请大小=" << required_bytes / 1024 << "KB"
+                        << " 最大允许=" << 9999999999 / 1024 << "KB";
+            }
         
         // 3. 设置动态维度 (实际点数)
         nvinfer1::Dims gnn_input_dims;
-        gnn_input_dims.nbDims = 4;  // 注意：TensorRT需要4维张量
+        gnn_input_dims.nbDims = 3;  // 关键：维度数=3
         gnn_input_dims.d[0] = 1;    // batch
-        gnn_input_dims.d[1] = desc_channels; // 通道
-        gnn_input_dims.d[2] = 1;    // 高度（单行描述符）
-        gnn_input_dims.d[3] = num_points; // 宽度（点数）
-        
-        gnn_context_->setBindingDimensions(0, gnn_input_dims);
+        gnn_input_dims.d[1] = desc_channels; // 通道数
+        gnn_input_dims.d[2] = num_points;    // 动态节点数（非固定值！）
 
-        if (!gnn_context_->setBindingDimensions(0, gnn_input_dims)) {
-            std::cerr << "Failed to set GNN input dimensions!" << std::endl;
-            // 打印实际维度
-            std::cerr << "Attempted dims: ";
-            for (int i = 0; i < gnn_input_dims.nbDims; ++i) 
-                std::cerr << gnn_input_dims.d[i] << " ";
-            std::cerr << std::endl;
-            
-            // 打印引擎期望的维度
+       if (!gnn_context_->setBindingDimensions(0, gnn_input_dims)) {
+            // 打印诊断信息
+            std::cerr << "维度设置失败！引擎期望: ";
             auto engine_dims = gnn_engine_->getBindingDimensions(0);
-            std::cerr << "Engine expects: ";
-            for (int i = 0; i < engine_dims.nbDims; ++i) 
-                std::cerr << engine_dims.d[i] << " ";
-            std::cerr << std::endl;
+            for (int i=0; i<engine_dims.nbDims; ++i) {
+                std::cerr << (engine_dims.d[i]==-1 ? "?" : std::to_string(engine_dims.d[i])) << " ";
+            }
+            std::cerr << "\n实际设置: ";
+            for (int i=0; i<gnn_input_dims.nbDims; ++i) {
+                std::cerr << gnn_input_dims.d[i] << " ";
+            }
+          
         }
+                
         
         // 4. 执行GNN推理
         void* gnn_bindings[] = {gnn_input_d_, gnn_output_d_};
@@ -1338,10 +1350,26 @@ bool PsDet::loadGNNModel(const std::string& gnn_engine_path) {
     cudaMalloc(&gnn_input_d_, gnn_input_size * sizeof(float));
     cudaMalloc(&gnn_output_d_, gnn_output_size * sizeof(float));
     
-    // 打印绑定信息
-    std::cout << "GNN input name: " << gnn_engine_->getBindingName(0) << std::endl;
-    for (int i = 1; i < gnn_engine_->getNbBindings(); ++i) {
-        std::cout << "GNN output name: " << gnn_engine_->getBindingName(i) << std::endl;
+    // 打印绑定信息， 包括模型的输入，和输出，以及dim的维度大小
+    int nbBindings = gnn_engine_->getNbBindings();
+    for (int i = 0; i < nbBindings; ++i) {
+        Dims dims = gnn_engine_->getBindingDimensions(i);
+        std::string bindingName = gnn_engine_->getBindingName(i);
+        if (gnn_engine_->bindingIsInput(i)) {
+            std::cout << "Input binding name: " << bindingName << std::endl;
+            std::cout << "Input dims: ";
+            for (int j = 0; j < dims.nbDims; ++j) {
+                std::cout << dims.d[j] << " ";
+            }
+            std::cout << std::endl;
+        } else {
+            std::cout << "Output binding name: " << bindingName << std::endl;
+            std::cout << "Output dims: ";
+            for (int j = 0; j < dims.nbDims; ++j) {
+                std::cout << dims.d[j] << " ";
+            }
+            std::cout << std::endl;
+        }
     }
     
     return true;

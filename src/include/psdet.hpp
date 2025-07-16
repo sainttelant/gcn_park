@@ -110,6 +110,8 @@ private:
 
     nvinfer1::ICudaEngine* gnn_engine_ = nullptr;
     nvinfer1::IExecutionContext* gnn_context_ = nullptr;
+
+
     float* gnn_input_d_ = nullptr;       // 设备端输入: descriptors
     float* gnn_output_d_ = nullptr;      // 设备端输出: edge_pred
     std::vector<float> gnn_input_h_;     // 主机端输入
@@ -118,7 +120,8 @@ private:
     std::vector<float> input_h_;
     std::vector<float> output_points_h_;
     std::vector<float> output_slots_h_;
-
+    
+    
     float point_thresh_ = 0.008f;
     float slot_thresh_ = 0.05f;
     float nms_thresh_ = 0.0625f;    
