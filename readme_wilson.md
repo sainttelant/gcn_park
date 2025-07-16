@@ -47,9 +47,9 @@ trtexec --onnx=cache/ps_gat/100/output_onnx/gnn_model.onnx \
         --dumpLayerInfo \
         --saveEngine=cache/ps_gat/100/output_onnx/gnn_new.engine \
         --verbose \
-        --minShapes=descriptors:1x64x10 \
-        --optShapes=descriptors:1x64x50 \
-        --maxShapes=descriptors:1x64x100 \
+        --minShapes=descriptors:1x128x10,points:1x10x2  \
+        --optShapes=descriptors:1x128x50,points:1x50x2 \
+        --maxShapes=descriptors:1x128x100,points:1x100x2 \
         >> trtexec_gnn_log.txt
 
 

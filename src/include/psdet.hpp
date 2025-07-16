@@ -61,6 +61,9 @@ public:
     
     bool build(bool fp16 = false);
     bool load();
+
+    bool loadGNNModel(const std::string& gnn_engine_path);
+    int64_t safe_volume(const nvinfer1::Dims& dims);
     void save();
     
     bool infer(const cv::Mat& image, 
@@ -104,6 +107,13 @@ private:
     void* input_d_ = nullptr;
     void* output_points_d_ = nullptr;
     void* output_slots_d_ = nullptr;
+
+    nvinfer1::ICudaEngine* gnn_engine_ = nullptr;
+    nvinfer1::IExecutionContext* gnn_context_ = nullptr;
+    float* gnn_input_d_ = nullptr;       // 设备端输入: descriptors
+    float* gnn_output_d_ = nullptr;      // 设备端输出: edge_pred
+    std::vector<float> gnn_input_h_;     // 主机端输入
+    std::vector<float> gnn_output_h_;   // 主机端输出
     
     std::vector<float> input_h_;
     std::vector<float> output_points_h_;

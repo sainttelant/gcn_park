@@ -113,7 +113,7 @@ class PointDetector(nn.modules.Module):
             data_dict['vacant_pred'] = pred_dict['edges_pred']
 
         if self.cfg.use_gnn:
-            data_dict = self.graph_encoder(data_dict)
+            data_dict = self.graph_encoder(data_dict) # 这个地方下采样了，从128 下采样到64，把descriptors从128下采样到64
 
         pred_dict = self.edge_predictor(data_dict)
 
