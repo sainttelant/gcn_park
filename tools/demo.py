@@ -105,6 +105,8 @@ def main():
             #save the results of pred_dicts and ret_dict as txt files, if no txt file, it will be created
             # everytime clean the txt files
             savefolder =Path(image_dir) / 'predictions'
+            
+            """
             with open(savefolder / ('%s_pred_dicts.txt' % img_name), 'w') as f:
                 # write the results of pred_dicts['points_pred'] to the txt file
                 for i in range(len(pred_dicts['points_pred'])):           
@@ -114,7 +116,7 @@ def main():
                 for i in range(len(pred_dicts['slots_pred'])):
                     for j in range(len(pred_dicts['slots_pred'][i])):
                         f.write(str(pred_dicts['slots_pred'][i][j]) + '\n')
-                
+            """    
             
             sec_per_example = (time.time() - start_time)
             print('Info speed: %.4f second per example.' % sec_per_example)

@@ -106,7 +106,7 @@ int main() {
     const int max_slots_original = 1*128*16*16;
 
     // 图片目录设置
-    const std::string image_dir = "/workspace/APA/gcn-parking-slot/images/";
+    const std::string image_dir = "datasets/parking_slot/testing/indoor-parking lot/";
     std::vector<std::string> image_paths = getJpgImagesInDirectory(image_dir);
 
     if (image_paths.empty()) {

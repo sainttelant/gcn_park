@@ -41,8 +41,8 @@ struct ParkingSlot {
 };
 
 struct Config {
-    bool use_slant_predictor = true;
-    bool use_vacant_predictor = true;
+    bool use_slant_predictor = false;
+    bool use_vacant_predictor = false;
     bool use_gnn = true;
     
 };
@@ -82,6 +82,7 @@ public:
             std::vector<KeyPoint> points;
             std::vector<float> slant_pred;
             std::vector<float> vacant_pred;
+            std::vector<float> graph_output;
             std::vector<float> edge_pred;
         };
 
@@ -107,19 +108,27 @@ private:
     void* input_d_ = nullptr;
     void* output_points_d_ = nullptr;
     void* output_slots_d_ = nullptr;
-
-    nvinfer1::ICudaEngine* gnn_engine_ = nullptr;
-    nvinfer1::IExecutionContext* gnn_context_ = nullptr;
-
-
-    float* gnn_input_d_ = nullptr;       // 设备端输入: descriptors
-    float* gnn_output_d_ = nullptr;      // 设备端输出: edge_pred
-    std::vector<float> gnn_input_h_;     // 主机端输入
-    std::vector<float> gnn_output_h_;   // 主机端输出
-    
     std::vector<float> input_h_;
     std::vector<float> output_points_h_;
     std::vector<float> output_slots_h_;
+
+
+    // gnn relative parameters
+    nvinfer1::ICudaEngine* gnn_engine_ = nullptr;
+    nvinfer1::IExecutionContext* gnn_context_ = nullptr;
+
+    // 输入缓冲区
+    float* gnn_descriptors_d_ = nullptr;   // descriptors输入(device)
+    float* gnn_points_d_ = nullptr;        // points输入(device)
+    std::vector<float> gnn_descriptors_h_; // descriptors输入(host)
+    std::vector<float> gnn_points_h_;      // points输入(host)
+
+    // 输出缓冲区
+    float* gnn_edge_pred_d_ = nullptr;     // edge_pred输出(device)
+    float* gnn_graph_output_d_ = nullptr;   // graph_output输出(device)
+    std::vector<float> gnn_edge_pred_h_;   // edge_pred输出(host)
+    std::vector<float> gnn_graph_output_h_; // graph_output输出(host)
+
     
     
     float point_thresh_ = 0.008f;
@@ -128,11 +137,7 @@ private:
     int max_points_cfg = 10;
     
     Config cfg_;
-   /*  void grid_sample_cuda(const float* input, const float* grid, float* output, 
-                         int batch_size, int channels, int in_h, int in_w, 
-                         int out_h, int out_w, bool align_corners);
-                         
-    void normalize_cuda(float* data, int num_elements, int dim, float p, float eps); */
+  
 
     void preprocess(const cv::Mat& image, float* input);
     void postprocess(std::vector<std::vector<KeyPoint>>& output_points,

@@ -26,14 +26,17 @@ PsDet::PsDet(const std::string& onnx_path,
     output_points_h_.resize(max_batch_size_ *3* points_3d_dim_ * points_4d_dim_);
     output_slots_h_.resize(max_batch_size_ *128* points_3d_dim_ * points_4d_dim_);
 
-    // 新增GNN模型相关初始化
-    gnn_input_h_.reserve(max_points * 128);  // 预分配内存
-    gnn_output_h_.reserve(max_points * max_points);    
+    // 初始化gnn相关的
+    gnn_descriptors_h_.resize(max_points * 128);  // [1, 128, max_points] 实际是 [1,128,10]
+    gnn_points_h_.resize(max_points * 2);          // [1, max_points, 2]   实际是 [1,10,2]
+    gnn_edge_pred_h_.resize(max_points * max_points); // [1, 1, max_points*max_points] 实际是 [1,1,100]
+    gnn_graph_output_h_.resize(max_points * 64);  // [1, 64, max_points]   实际是 [1,64,10]
 
 }
 
 // 析构函数 - 修复销毁顺序[8](@ref)
 PsDet::~PsDet() {
+    // 只destroy主要前端网络的buffers
     destroyBuffers();
     if (context_) {
         context_->destroy();
@@ -47,10 +50,16 @@ PsDet::~PsDet() {
         runtime_->destroy();
         runtime_ = nullptr;
     }
+
+     // 释放GNN资源
     if (gnn_context_) gnn_context_->destroy();
     if (gnn_engine_) gnn_engine_->destroy();
-    if (gnn_input_d_) cudaFree(gnn_input_d_);
-    if (gnn_output_d_) cudaFree(gnn_output_d_);
+    
+    // 释放CUDA内存
+    if (gnn_descriptors_d_) cudaFree(gnn_descriptors_d_);
+    if (gnn_points_d_) cudaFree(gnn_points_d_);
+    if (gnn_edge_pred_d_) cudaFree(gnn_edge_pred_d_);
+    if (gnn_graph_output_d_) cudaFree(gnn_graph_output_d_);
     
 }
 
@@ -290,7 +299,7 @@ bool PsDet::build(bool fp16) {
     }
     printf("before saving engine <<<<<<<<<<<<<<<<<<<\n");
     // 9. 保存引擎文件
-    std::ofstream ofs(engine_path_, std::ios::binary);
+     std::ofstream ofs(engine_path_, std::ios::binary);
     if (ofs) {
         ofs.write(reinterpret_cast<const char*>(serialized_engine->data()), serialized_engine->size());
         logger_.log(ILogger::Severity::kINFO, 
@@ -299,7 +308,7 @@ bool PsDet::build(bool fp16) {
     } else {
         logger_.log(ILogger::Severity::kERROR, 
                    ("Failed to open engine file for writing: " + engine_path_).c_str());
-    }
+    } 
 
     printf("before destroy <<<<<<<<<<<<<<<<<<<\n");
     // 10. 资源清理（使用安全销毁模式）
@@ -407,225 +416,6 @@ void PsDet::process_points(
     output_points.push_back(nms_points);
     
 }
-
-
-
-/* void PsDet::process_slots(
-     const std::vector<std::vector<KeyPoint>>& points_list, 
-    const float* descriptor_map,
-    std::vector<std::vector<ParkingSlot>>& output_slots,
-    int batch_size)
-{
-    output_slots.clear();
-    //output_slots.resize(batch_size);
-    
-    // 描述符图的尺寸信息
-    const int desc_channels = 128;
-    const int desc_height = input_height_ / 32;
-    const int desc_width = input_width_ / 32;
-    
-
-    std::vector<KeyPoint> points_for_reserve;
-    points_for_reserve.reserve(max_points_cfg);
-    points_for_reserve.resize(max_points_cfg); // 使用 resize 而不是 reserve
-
-        // 将 points_for_reserve 初始化为 max_points_cfg 个空的 KeyPoint
-        for (int i = 0; i < max_points_cfg; ++i) {
-            points_for_reserve[i] = KeyPoint{0.0f, 0.0f, 0.0f};
-        }
-
-        // 将 points_list[0] 复制到 points_for_reserve
-        int points_to_copy = std::min(static_cast<int>(points_list[0].size()), max_points_cfg);
-        for (int i = 0; i < points_to_copy; ++i) {
-            points_for_reserve[i].conf = points_list[0][i].conf;
-            points_for_reserve[i].x = points_list[0][i].x;
-            points_for_reserve[i].y = points_list[0][i].y;
-        }
-   
-       
-        std::vector<ParkingSlot> batch_slots;
-        
-
-        // 1. 采样关键点的描述符
-        std::vector<float> descriptors;
-        std::vector<float> grid_points;
-        grid_points.reserve(max_points_cfg);
-        
-        // 准备采样网格
-        for (const auto& kp : points_for_reserve) {
-            // 归一化坐标转网格坐标
-            float grid_x = kp.x * 2 - 1;  // [-1, 1] 范围
-            float grid_y = kp.y * 2 - 1;
-            grid_points.push_back(grid_x);
-            grid_points.push_back(grid_y);
-        }
-       
-
-        int b = 1;
-        // 在GPU上采样描述符
-        const int num_points = points_for_reserve.size();
-        float* sampled_descriptors= nullptr;
-        cudaError_t err =cudaMalloc((void**)&sampled_descriptors, 1*128*1*10*sizeof(float));
-        if (err != cudaSuccess) {
-            std::cerr << "CUDA error in cudaMalloc: " << cudaGetErrorString(err) << std::endl;
-        }
-        
-
-        int input_dims[4] = {1, desc_channels, desc_height, desc_width}; // NCHW
-        int grid_dims[4] = {1, num_points, 1, 2}; // [batch, num_points, 1, 2]
-        int output_dims[4] = {1, desc_channels, num_points, 1}; // 输出维度
-
-        // 网格坐标范围检查
-        for (auto& coord : grid_points) {
-            if (coord < -1.0f || coord > 1.0f) {
-                std::cerr << "Invalid grid coordinate: " << coord 
-                        << " at index " << &coord - grid_points.data() << std::endl;
-                coord = std::clamp(coord, -1.0f, 1.0f);
-            }
-        }
-
-        // 验证输入描述符维度
-        std::cout << "Descriptor map actual size: " 
-                << desc_height << "x" << desc_width << std::endl;
-        std::cout << "Grid points count: " << grid_points.size() << std::endl;
-        std::cout << "Expected grid points: " << num_points * 2 << std::endl;
-
-        // 验证输出空间
-        size_t required_mem = 1 * 128 * num_points * 1 * sizeof(float);
-        if (required_mem > 1 * 128 * 1 * 10*sizeof(float)) {
-            std::cerr << "Insufficient memory allocated! Required: " 
-                    << required_mem << ", Allocated: "
-                    << 1 * 128 * 1 * 10*sizeof(float) << std::endl;
-        }
-
-        // 调用grid_sample
-        grid_sample<float>(
-            sampled_descriptors, 
-            &descriptor_map[b * desc_channels * desc_height * desc_width],
-            grid_points.data(),
-            output_dims,
-            input_dims,
-            grid_dims,
-            4, // 4维数据（2D采样）
-            GridSamplerInterpolation::Bilinear,
-            GridSamplerPadding::Zeros,
-            true, // align_corners
-            stream_ // 使用类的CUDA流
-        );
-
-        cudaStreamSynchronize(stream_); // 等待内核完成
-        cudaError_t err_grid = cudaGetLastError(); // 检查内核错误
-
-        // 增强错误检查
-        if (err_grid != cudaSuccess) {
-            std::cerr << "CUDA error in grid_sample: " 
-                    << cudaGetErrorString(err_grid) 
-                    << " (Code: " << err_grid << ")" << std::endl;
-            
-            // 特定错误处理
-            if (err_grid == cudaErrorInvalidValue) {
-                std::cerr << "Likely cause: Invalid grid coordinates" << std::endl;
-            } else if (err_grid == cudaErrorIllegalAddress) {
-                std::cerr << "Likely cause: Memory access violation" << std::endl;
-            }
-        }
-                
-        // 归一化描述符
-        normalize_cuda(sampled_descriptors, num_points, desc_channels, 2.0f, 1e-5f);
-        
-        // 2. 构建数据字典（模拟Python的data_dict）
-      
-        
-        SlotData data_dict;
-        
-        // 将GPU数据拷贝回CPU
-        data_dict.descriptors.resize(num_points * desc_channels);
-        cudaMemcpy(data_dict.descriptors.data(), sampled_descriptors, 
-                  num_points * desc_channels * sizeof(float), cudaMemcpyDeviceToHost);
-        
-        data_dict.points = points_for_reserve;
-        
-        // 3. 倾斜预测器（如果配置了）
-        if (cfg_.use_slant_predictor) 
-        {
-            
-            data_dict.slant_pred.resize(num_points * 2);  // 每个点有起点和终点倾斜
-            for (int i = 0; i < num_points * 2; ++i) {
-                data_dict.slant_pred[i] = static_cast<float>(rand()) / RAND_MAX;
-            }
-        }
-        
-        // 4. 空位预测器（如果配置了）
-        if (cfg_.use_vacant_predictor) {
-            // 实际应用中应调用空位预测器模型
-            data_dict.vacant_pred.resize(num_points);
-            for (int i = 0; i < num_points; ++i) {
-                data_dict.vacant_pred[i] = static_cast<float>(rand()) / RAND_MAX;
-            }
-        }
-        
-        // 5. 图神经网络处理（如果配置了）
-        if (cfg_.use_gnn) {
-            // 实际应用中应调用GNN模型
-            // 这里简化处理：添加随机噪声
-            printf("data_dict.descriptors size is: %d\n", data_dict.descriptors.size());
-            // 将data_dict.descriptors 的结果写入txt文件,小数点6位精度
-            std::ofstream f("images/predictions/descriptors_after_grid_sample_cpp.txt");
-            for (float val : data_dict.descriptors) {
-                f << std::endl;
-                f << std::fixed << std::setprecision(6) << val << " ";
-            }
-            for (float& val : data_dict.descriptors) {
-
-                val += (static_cast<float>(rand()) / RAND_MAX - 0.5f) * 0.1f;
-            }
-        }
-        
-        // 6. 边缘预测器
-        // 实际应用中应调用边缘预测器模型
-        // 这里简化实现：连接空间上接近的点
-        const float connection_threshold = 0.05f;  // 归一化距离阈值
-        
-        for (size_t i = 0; i < points_for_reserve.size(); ++i) {
-            for (size_t j = i + 1; j < points_for_reserve.size(); ++j) {
-                const auto& p1 = points_for_reserve[i];
-                const auto& p2 = points_for_reserve[j];
-                
-                // 计算归一化距离
-                float dx = p1.x - p2.x;
-                float dy = p1.y - p2.y;
-                float dist_sq = dx * dx + dy * dy;
-                
-                // 如果距离小于阈值且方向大致相同，则连接
-                if (dist_sq < connection_threshold * connection_threshold) {
-                    // 置信度基于距离和点的置信度
-                    float conf = (p1.conf + p2.conf) * 0.5f * 
-                                (1.0f - sqrt(dist_sq) / connection_threshold);
-                    
-                   if (conf > slot_thresh_) 
-                        {
-                            ParkingSlot slot;
-                            slot.confidence = conf;
-                            slot.coords = {p1.x, p1.y, p2.x, p2.y}; 
-                            batch_slots.push_back(slot);
-                        };
-                }
-            }
-        }
-        
-        // 7. 清理资源
-        if (sampled_descriptors == nullptr) {
-            std::cerr << "Pointer is null!" << std::endl;
-        }
-        cudaError_t err_free =  cudaFree(sampled_descriptors);
-       if (err_free != cudaSuccess) {
-            std::cerr << "Error freeing sampled_descriptors: " 
-                    << cudaGetErrorString(err_free) << " (Code: " << err_free << ")" << std::endl;
-        }
-        sampled_descriptors = nullptr;
-        output_slots[b] = batch_slots;
-    
-} */
 
  void PsDet::process_slots(
     const std::vector<std::vector<KeyPoint>>& points_list, 
@@ -767,7 +557,7 @@ void PsDet::process_points(
         sampled_descriptors_cpu = (float*)malloc(required_mem);
         cudaMemcpyAsync(sampled_descriptors_cpu, sampled_descriptors, required_mem, cudaMemcpyDeviceToHost, stream_);
 
-        // 保存结果到txt中
+        // 保存结果到txt中 ,经过验证是相同的
     /*     std::ofstream file("images/predictions/descriptors_after_grid_sample_cpp.txt");
         for (int i = 0; i < required_mem / sizeof(float); i++) {
             file <<std::setprecision(6) <<sampled_descriptors_cpu[i] << " ";
@@ -799,22 +589,17 @@ void PsDet::process_points(
         data_dict.descriptors.resize(num_points * desc_channels);
         data_dict.points.resize(2*num_points);   // 成对出现的。所以乘以2
 
-        // 6.从point_lists中将点放到data_dict.points中
-        for (int i = 0; i < num_points; i++) {
-            data_dict.points[2*i].x = actual_points[i].x;
-            data_dict.points[2*i+1].y = actual_points[i].y;
-        }
-
+        
 
         cudaMemcpy(data_dict.descriptors.data(), out_normalized_d, 
                   required_mem, cudaMemcpyDeviceToHost);
 
-        std::ofstream file("images/predictions/descriptors_after_normalize_cpp.txt");          
+      /*   std::ofstream file("images/predictions/descriptors_after_normalize_cpp.txt");          
         for (int i =0; i < data_dict.descriptors.size(); i++) {
             file <<std::setprecision(6) <<data_dict.descriptors[i] << " ";
             file << std::endl;
         }
-        file.close();
+        file.close(); */
 
         data_dict.points = actual_points;
 
@@ -826,72 +611,117 @@ void PsDet::process_points(
         // 1. 准备GNN输入数据 (descriptors)
         //const int num_points = actual_points.size();
           
-        // 将描述符数据转换为GNN模型需要的格式 [1, 128, num_points]
-        for (int c = 0; c < desc_channels; ++c) {
-        for (int p = 0; p < num_points; ++p) {
-            gnn_input_h_[c * num_points + p] = data_dict.descriptors[p * desc_channels + c];
-        }
-        }
+    
+         // points输入: [1, num_points, 2]
+        for (int i = 0; i < num_points; ++i) {
+            gnn_points_h_[i * 2] = actual_points[i].x;     // x坐标
+            gnn_points_h_[i * 2 + 1] = actual_points[i].y; // y坐标
+            if (i >3) // 与python的保持一致
+            {
+                gnn_points_h_[i * 2 + 1] = 0;
+                gnn_points_h_[i * 2] = 0;
+            }
+            
+            // 打印points数据
+            //printf("points: %f, %f\n", gnn_points_h_[i * 2], gnn_points_h_[i * 2 + 1]);
+        } 
         
         // 2. 传输数据到设备
-        // 确保拷贝尺寸与目标缓冲区一致
-            size_t required_bytes = gnn_input_h_.size() * sizeof(float);
-            cudaMemcpyAsync(gnn_input_d_, gnn_input_h_.data(), 
-                            required_bytes, // 显式指定字节数
-                            cudaMemcpyHostToDevice, stream_);
+        size_t desc_bytes = 1 * 128 * num_points * sizeof(float);
+        cudaMemcpyAsync(gnn_descriptors_d_, data_dict.descriptors.data(),
+                       desc_bytes, cudaMemcpyHostToDevice, stream_);
         
-            // 添加边界检查
-            if (gnn_input_d_ == nullptr || required_bytes > 9999999999) {
-            std::cerr << "非法内存访问：设备指针=" << gnn_input_d_ 
-                        << " 申请大小=" << required_bytes / 1024 << "KB"
-                        << " 最大允许=" << 9999999999 / 1024 << "KB";
-            }
+        size_t points_bytes = num_points * 2 * sizeof(float);
+        cudaMemcpyAsync(gnn_points_d_, gnn_points_h_.data(),
+                       points_bytes, cudaMemcpyHostToDevice, stream_);
+
+
         
         // 3. 设置动态维度 (实际点数)
-        nvinfer1::Dims gnn_input_dims;
-        gnn_input_dims.nbDims = 3;  // 关键：维度数=3
-        gnn_input_dims.d[0] = 1;    // batch
-        gnn_input_dims.d[1] = desc_channels; // 通道数
-        gnn_input_dims.d[2] = num_points;    // 动态节点数（非固定值！）
+        nvinfer1::Dims desc_dims;
+        desc_dims.nbDims = 3;
+        desc_dims.d[0] = 1;    // batch
+        desc_dims.d[1] = 128; // 通道数
+        desc_dims.d[2] = num_points; // 动态节点数
 
-       if (!gnn_context_->setBindingDimensions(0, gnn_input_dims)) {
-            // 打印诊断信息
-            std::cerr << "维度设置失败！引擎期望: ";
+        // 2. 定义points输入维度 [1, num_points, 2]
+        nvinfer1::Dims points_dims;
+        points_dims.nbDims = 3;
+        points_dims.d[0] = 1;    // batch
+        points_dims.d[1] = num_points; // 节点数
+        points_dims.d[2] = 2;    // 坐标维度(x,y)
+
+        // 3. 绑定维度（增强错误检查）
+        if (!gnn_context_->setBindingDimensions(0, desc_dims)) {
             auto engine_dims = gnn_engine_->getBindingDimensions(0);
-            for (int i=0; i<engine_dims.nbDims; ++i) {
+            std::cerr << "Descriptors维度绑定失败! 引擎期望: ";
+            for (int i=0; i<engine_dims.nbDims; ++i) 
                 std::cerr << (engine_dims.d[i]==-1 ? "?" : std::to_string(engine_dims.d[i])) << " ";
-            }
             std::cerr << "\n实际设置: ";
-            for (int i=0; i<gnn_input_dims.nbDims; ++i) {
-                std::cerr << gnn_input_dims.d[i] << " ";
-            }
-          
+            for (int i=0; i<desc_dims.nbDims; ++i) 
+                std::cerr << desc_dims.d[i] << " ";
+            continue; // 跳过当前batch
         }
-                
+
+        if (!gnn_context_->setBindingDimensions(1, points_dims)) {
+            auto engine_dims = gnn_engine_->getBindingDimensions(1);
+            std::cerr << "Points维度绑定失败! 引擎期望: ";
+            for (int i=0; i<engine_dims.nbDims; ++i) 
+                std::cerr << (engine_dims.d[i]==-1 ? "?" : std::to_string(engine_dims.d[i])) << " ";
+            std::cerr << "\n实际设置: ";
+            for (int i=0; i<points_dims.nbDims; ++i) 
+                std::cerr << points_dims.d[i] << " ";
+            continue;
+        }
         
-        // 4. 执行GNN推理
-        void* gnn_bindings[] = {gnn_input_d_, gnn_output_d_};
+        // 4. 执行推理
+        void* gnn_bindings[] = {
+            gnn_descriptors_d_,   // binding 0: descriptors
+            gnn_points_d_,        // binding 1: points
+            gnn_graph_output_d_,  // binding 2: graph_output
+            gnn_edge_pred_d_      // binding 3: edge_pred
+        };
+        
         if (!gnn_context_->enqueueV2(gnn_bindings, stream_, nullptr)) {
             std::cerr << "GNN inference failed for batch " << b << std::endl;
             continue;
         }
-        
-        // 5. 取回结果
-        cudaMemcpyAsync(gnn_output_h_.data(), gnn_output_d_,
-                    gnn_output_h_.size() * sizeof(float),
-                    cudaMemcpyDeviceToHost, stream_);
-        cudaStreamSynchronize(stream_);
-        
-        // 6. 解析边缘预测结果
-        // gnn_output_h_ 形状为 [1, 1, num_points*num_points]
-        // 每个元素代表两点之间连接的概率
-        
-        // ===== 使用GNN预测结果连接关键点 =====
-        for (int i = 0; i < num_points; ++i) {
-            for (int j = 0; j < num_points; ++j) {
-                if (i == j) continue;  // 跳过自连接
                 
-                float edge_prob = gnn_output_h_[i * num_points + j];
+        // 5. 取回结果
+        size_t edge_pred_bytes = 100*1 * sizeof(float);
+        size_t graph_output_bytes = num_points * 64 * sizeof(float);
+        
+        cudaMemcpyAsync(gnn_edge_pred_h_.data(), gnn_edge_pred_d_,
+                      edge_pred_bytes, cudaMemcpyDeviceToHost, stream_);
+        cudaMemcpyAsync(gnn_graph_output_h_.data(), gnn_graph_output_d_,
+                      graph_output_bytes, cudaMemcpyDeviceToHost, stream_);
+        cudaStreamSynchronize(stream_);
+
+        // 保存结果到txt
+        
+       /*  std::ofstream file_edge("images/predictions/edge_pred_cpp.txt");
+        for(int i =0; i < 100; i++){
+            file_edge << std::fixed << std::setprecision(6) << gnn_edge_pred_h_[i] << " ";
+            file_edge << std::endl;
+        }
+        file_edge.close();
+
+        std::ofstream file_graph("images/predictions/graph_output_cpp.txt");
+        for (int i =0 ; i < 640; i++){
+            file_graph << std::fixed << std::setprecision(6) << gnn_graph_output_h_[i] << " ";
+            file_graph << std::endl;
+        }
+        file_graph.close(); */
+
+       
+
+        
+        // 6. 使用edge_pred结果连接关键点， 4 和 10 是与python对齐的
+        for (int i = 0; i < 4; ++i) {
+            for (int j = 0; j < 4; ++j) {
+                if (i == j) continue;
+                
+                float edge_prob = gnn_edge_pred_h_[i * 10 + j];
                 if (edge_prob > slot_thresh_) {
                     const auto& p1 = actual_points[i];
                     const auto& p2 = actual_points[j];
@@ -903,30 +733,8 @@ void PsDet::process_points(
                 }
             }
         }
-        // 6. 边缘预测 - 仅连接实际点
-        const float connection_threshold = 0.05f;
-        for (size_t i = 0; i < num_points; ++i) {
-            for (size_t j = i + 1; j < num_points; ++j) {
-                const auto& p1 = actual_points[i];
-                const auto& p2 = actual_points[j];
-                
-                float dx = p1.x - p2.x;
-                float dy = p1.y - p2.y;
-                float dist_sq = dx * dx + dy * dy;
-                
-                if (dist_sq < connection_threshold * connection_threshold) {
-                    float conf = (p1.conf + p2.conf) * 0.5f * 
-                                (1.0f - sqrt(dist_sq) / connection_threshold);
-                    
-                    if (conf > slot_thresh_) {
-                        ParkingSlot slot;
-                        slot.confidence = conf;
-                        slot.coords = {p1.x, p1.y, p2.x, p2.y}; 
-                        batch_slots.push_back(slot);
-                    }
-                }
-            }
-        }
+        
+       
         
         std::cout << "Slots processed for batch " << b << ": " << batch_slots.size() << " slots found" << std::endl;
 
@@ -952,14 +760,22 @@ void PsDet::process_points(
         
         output_slots[b] = std::move(batch_slots);  
 
+
+        // 打印输出槽位信息
         for (auto res: output_slots[b]) {
             
             std::cout << res.coords[0] << " " << res.coords[1] << " " << res.coords[2] << " " << res.coords[3] << std::endl;
             std::cout << res.confidence << std::endl;
 
         }
-
-
+        // 将结果写到txt中 
+        /* std::ofstream file_slots("images/predictions/slots_pred_cpp.txt");
+        for (auto res: output_slots[b]) {
+            file_slots <<"confidence"<<"\t"<<"coords0"<<"\t"<<"coords1"<<"\t"<<"coords2"<<"\t"<<"coords3"<<"\n";
+            file_slots << res.confidence << "\t" << res.coords[0] << "\t" << res.coords[1] << "\t" << res.coords[2] << "\t" << res.coords[3] << "\n";
+            
+        }
+        file_slots.close(); */
 
 
     }
@@ -978,7 +794,7 @@ void PsDet::postprocess(std::vector<std::vector<KeyPoint>>& output_points,
     process_points(output_points_h_.data(), output_points, actual_batch_size);
 
     // write output_points to txt file 
-    std::ofstream file("images/predictions/output_points_cpp.txt");
+    /* std::ofstream file("images/predictions/output_points_cpp.txt");
     
     if (!output_points.empty()) {
        for (const auto& points : output_points) {
@@ -988,7 +804,7 @@ void PsDet::postprocess(std::vector<std::vector<KeyPoint>>& output_points,
        }
     }
  
-    file.close();
+    file.close(); */
     
     // 处理槽位预测（假设描述符图在output_slots_h_中）
     process_slots(output_points, output_slots_h_.data(), 
@@ -1093,7 +909,7 @@ bool PsDet::infer(const cv::Mat& image,
     std::cout << "Points输出总和: " << sum_points << " | Slots输出总和: " << sum_slots;
     
    
-   /*  std::ofstream output_points_file("images/predictions/output_points_orig.txt"), \
+    /* std::ofstream output_points_file("images/predictions/points_pred_cpp.txt"), \
     output_slots_file("images/predictions/output_slots_orig.txt");
     for (const auto& point : output_points_h_) {
         // 每存储一个就空行
@@ -1109,7 +925,7 @@ bool PsDet::infer(const cv::Mat& image,
     }
     output_slots_file << std::endl;
     output_points_file.close();
-    output_slots_file.close(); */
+    output_slots_file.close();  */
     
     // 检查CUDA错误
     cudaError_t error = cudaGetLastError();
@@ -1134,47 +950,21 @@ void PsDet::visualizeResults(cv::Mat & car,cv::Mat& image,
     const int width = image.cols;
     const int height = image.rows;
 
-    // resize the image to (input_width, input_height)
-    cv::resize(image, image, cv::Size(input_width_, input_height_));
+    // ... [保持你原有的图像处理代码不变] ...
 
-    cv::resize(car, car, cv::Size(input_width_, input_height_));
-    // 设置指定区域为黑色
-    cv::Rect roi(210, 145, 90, 220);
-
-    roi.x = std::max(roi.x, 0);
-    roi.y = std::max(roi.y, 0);
-    roi.width = std::min(roi.width, image.cols - roi.x);
-    roi.height = std::min(roi.height, image.rows - roi.y);
-
-    // 将指定区域设置为0
-    image(roi) = cv::Scalar(0, 0, 0);
-
-    // 确保 roi 的大小与 car 图像的大小相同
-    cv::resize(car, car, cv::Size(roi.width, roi.height));
+    // 距离阈值常量 (保持相同值)
+    constexpr float VSLOT_MIN_DIST = 0.044771278151623496f;
+    constexpr float VSLOT_MAX_DIST = 0.1099427457599304f;
+    constexpr float HSLOT_MIN_DIST = 0.15057789144568634f;  // 新增水平车位阈值
+    constexpr float HSLOT_MAX_DIST = 0.44449496544202816f;   // 新增水平车位阈值
     
-   
-    // 将 car 复制到 image 的指定区域
-    cv::Mat image_roi = image(roi);
-    if (car.channels() == 4 && image_roi.channels() == 3) {
-        // 如果 car 是RGBA图像，将其转换为RGB图像
-        cv::cvtColor(car, car, cv::COLOR_RGBA2RGB);
-    }
-    // 确保 car 和 image_roi 的大小相同
-    if (car.size() == image_roi.size()) {
-        cv::addWeighted(image_roi, 1.0, car, 1.0, 0.0, image_roi);
-    } else {
-        std::cerr << "Error: Sizes of car and image_roi do not match." << std::endl;
-    }
-
- 
-
-    // 距离阈值常量
-    constexpr float VSLOT_MIN_DIST = 0.04477f;
-    constexpr float VSLOT_MAX_DIST = 0.10994f;
-    constexpr float SHORT_SEP_LEN = 0.19952f;
+    constexpr float SHORT_SEP_LEN = 0.199519231f;
     constexpr float LONG_SEP_LEN = 0.46875f;
+
+    // 用于收集所有端点
+    std::vector<cv::Point> junctions;
     
-    // 1. 绘制停车位
+    // 1. 绘制停车位 (修正后的实现)
     for (const auto& batch_slots : slots) {
         for (const auto& slot : batch_slots) {
             // 坐标转换：归一化→像素
@@ -1192,17 +982,29 @@ void PsDet::visualizeResults(cv::Mat & car,cv::Mat& image,
             float length = std::sqrt(vec.x*vec.x + vec.y*vec.y);
             cv::Point2f unit_vec = (length > 0) ? vec / length : cv::Point2f(1, 0);
             
-            // 确定分隔线长度
-            float dist_sq = (slot.coords[0] - slot.coords[2])*(slot.coords[0] - slot.coords[2]) + 
-                           (slot.coords[1] - slot.coords[3])*(slot.coords[1] - slot.coords[3]);
+            // 计算平方距离 (与Python一致)
+            float dist_sq = (slot.coords[0] - slot.coords[2]) * (slot.coords[0] - slot.coords[2]) + 
+                           (slot.coords[1] - slot.coords[3]) * (slot.coords[1] - slot.coords[3]);
             
-            float sep_length = (VSLOT_MIN_DIST <= dist_sq && dist_sq <= VSLOT_MAX_DIST)
-                             ? LONG_SEP_LEN : SHORT_SEP_LEN;
+            // 确定分隔线长度 (添加水平车位判断)
+            float sep_length;
+            if (VSLOT_MIN_DIST <= dist_sq && dist_sq <= VSLOT_MAX_DIST) {
+                sep_length = LONG_SEP_LEN;  // 垂直车位
+            } else if (HSLOT_MIN_DIST <= dist_sq && dist_sq <= HSLOT_MAX_DIST) {
+                sep_length = SHORT_SEP_LEN;  // 水平车位
+            } else {
+                sep_length = SHORT_SEP_LEN;  // 默认值
+            }
             
-            // 计算垂直方向延伸点
-            cv::Point2f perpendicular(-unit_vec.y, unit_vec.x);
-            cv::Point2f p2 = p0 + perpendicular * sep_length * height;
-            cv::Point2f p3 = p1 + perpendicular * sep_length * height;
+            // 修正垂直延伸点的计算 (与Python完全一致)
+            cv::Point2f p2(
+                p0.x + height * sep_length * unit_vec.y,
+                p0.y - width * sep_length * unit_vec.x
+            );
+            cv::Point2f p3(
+                p1.x + height * sep_length * unit_vec.y,
+                p1.y - width * sep_length * unit_vec.x
+            );
             
             // 坐标取整
             cv::Point ip0(static_cast<int>(std::round(p0.x)), 
@@ -1214,21 +1016,20 @@ void PsDet::visualizeResults(cv::Mat & car,cv::Mat& image,
             cv::Point ip3(static_cast<int>(std::round(p3.x)), 
                          static_cast<int>(std::round(p3.y)));
             
-            // 绘制车位线
-            cv::line(image, ip0, ip1, cv::Scalar(0, 0, 255), 2);  // 主方向线（红色）
-            cv::line(image, ip0, ip2, cv::Scalar(0, 255, 0), 2);  // 左侧分隔线（绿色）
-            cv::line(image, ip1, ip3, cv::Scalar(0, 255, 0), 2);  // 右侧分隔线（绿色）
+            // 绘制车位线 (改为统一蓝色)
+            cv::line(image, ip0, ip1, cv::Scalar(255, 0, 0), 2);  // 主方向线
+            cv::line(image, ip0, ip2, cv::Scalar(255, 0, 0), 2);  // 左侧分隔线
+            cv::line(image, ip1, ip3, cv::Scalar(255, 0, 0), 2);  // 右侧分隔线
             
-            // 绘制端点
-            cv::circle(image, ip0, 5, cv::Scalar(255, 0, 0), -1); // 起点（蓝色）
-            cv::circle(image, ip1, 5, cv::Scalar(0, 255, 255), -1); // 终点（黄色）
-            
-            // 显示置信度
-            std::string conf_text = cv::format("%.2f", slot.confidence);
-            cv::putText(image, conf_text, 
-                       cv::Point((ip0.x + ip1.x)/2, (ip0.y + ip1.y)/2),
-                       cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0), 2);
+            // 收集端点 (与Python一致)
+            junctions.push_back(ip0);
+            junctions.push_back(ip1);
         }
+    }
+    
+    // 绘制所有端点 (统一红色圆点)
+    for (const auto& pt : junctions) {
+        cv::circle(image, pt, 3, cv::Scalar(0, 0, 255), 4);
     }
     
     // 2. 绘制关键点（按批次不同颜色）
@@ -1275,6 +1076,9 @@ void PsDet::visualizeResults(cv::Mat & car,cv::Mat& image,
     std::string stats = cv::format("Points: %d | Slots: %d", total_points, total_slots);
     cv::putText(image, stats, cv::Point(10, 30), 
                cv::FONT_HERSHEY_DUPLEX, 0.8, cv::Scalar(0, 0, 255), 2);
+    // show image
+    //cv::imshow("Parking Slot Detection", image);
+    //cv::waitKey(50);
 }
 
 cv::Size PsDet::getInputSize() const {
@@ -1340,37 +1144,27 @@ bool PsDet::loadGNNModel(const std::string& gnn_engine_path) {
 
     // === 核心修改2：动态计算缓冲区大小 ===
    
-    const int gnn_input_size = 1 * input_dims.d[1];  // [1, C, max_nodes]
-    const int gnn_output_size = 640; // 根据输出维度计算
-
-    gnn_input_h_.resize(gnn_input_size);
-    gnn_output_h_.resize(gnn_output_size);
-    
-    // GPU内存分配
-    cudaMalloc(&gnn_input_d_, gnn_input_size * sizeof(float));
-    cudaMalloc(&gnn_output_d_, gnn_output_size * sizeof(float));
-    
     // 打印绑定信息， 包括模型的输入，和输出，以及dim的维度大小
     int nbBindings = gnn_engine_->getNbBindings();
     for (int i = 0; i < nbBindings; ++i) {
         Dims dims = gnn_engine_->getBindingDimensions(i);
-        std::string bindingName = gnn_engine_->getBindingName(i);
-        if (gnn_engine_->bindingIsInput(i)) {
-            std::cout << "Input binding name: " << bindingName << std::endl;
-            std::cout << "Input dims: ";
-            for (int j = 0; j < dims.nbDims; ++j) {
-                std::cout << dims.d[j] << " ";
-            }
-            std::cout << std::endl;
-        } else {
-            std::cout << "Output binding name: " << bindingName << std::endl;
-            std::cout << "Output dims: ";
-            for (int j = 0; j < dims.nbDims; ++j) {
-                std::cout << dims.d[j] << " ";
-            }
-            std::cout << std::endl;
+        std::string name = gnn_engine_->getBindingName(i);
+        bool isInput = gnn_engine_->bindingIsInput(i);
+        
+        std::cout << (isInput ? "Input" : "Output") 
+                  << " " << i << ": " << name << " [";
+        for (int j = 0; j < dims.nbDims; ++j) {
+            std::cout << (dims.d[j] == -1 ? "?" : std::to_string(dims.d[j])) << " ";
         }
+        std::cout << "]" << std::endl;
     }
+
+     // 预分配设备内存
+    cudaMalloc(&gnn_descriptors_d_, max_points_ * 128 * sizeof(float));
+    cudaMalloc(&gnn_points_d_, max_points_ * 2 * sizeof(float));
+    cudaMalloc(&gnn_edge_pred_d_, max_points_ * max_points_ * sizeof(float));
+    cudaMalloc(&gnn_graph_output_d_, max_points_ * 64 * sizeof(float));
+    
     
     return true;
 }

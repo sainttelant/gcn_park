@@ -115,9 +115,20 @@ class PointDetector(nn.modules.Module):
         if self.cfg.use_gnn:
             data_dict = self.graph_encoder(data_dict) # 这个地方下采样了，从128 下采样到64，把descriptors从128下采样到64
 
+        # save data_dict['descriptors'] into txt file
+        import numpy as np
+        descriptors_2d = data_dict['descriptors'].cpu().numpy().reshape(data_dict['descriptors'].shape[0] * data_dict['descriptors'].shape[1], -1)
+        descriptors_2d = descriptors_2d.flatten()
+        np.savetxt('images/predictions/graph_output_python.txt', descriptors_2d,fmt='%.6f')
+        
         pred_dict = self.edge_predictor(data_dict)
 
         data_dict['edge_pred'] = pred_dict['edges_pred']
+        
+        edges_pred = data_dict['edge_pred'].cpu().numpy().reshape(data_dict['edge_pred'].shape[0] * data_dict['edge_pred'].shape[1], -1)
+        edges_pred = edges_pred.flatten()
+        np.savetxt('images/predictions/edge_pred_python.txt', edges_pred,fmt='%.6f')
+        
         return data_dict
 
     def sample_descriptors(self, descriptors, keypoints):
@@ -235,6 +246,28 @@ class PointDetector(nn.modules.Module):
 
         pred_dicts['points_pred'] = points_pred_batch
         pred_dicts['slots_pred'] = slots_pred
+        # 修改后的代码
+        with open('images/predictions/slots_pred_python.txt', 'a') as f:
+            # 写入标题行
+            header = "confidence coord0 coord1 coord2 coord3"
+            f.write(header + "\n")  # 添加换行符[2,6](@ref)
+            
+            # 遍历所有batch的预测结果
+            for batch_slots in slots_pred:
+                # 遍历当前batch中的所有slot
+                for slot in batch_slots:
+                    # 提取置信度和坐标值
+                    confidence = slot[0]
+                    coords = slot[1]
+                    
+                    # 确保坐标有4个值
+                    if len(coords) == 4:
+                        # 格式化数据行：置信度+4个坐标值，保留6位小数
+                        line = f"{confidence:.6f} {coords[0]:.6f} {coords[1]:.6f} {coords[2]:.6f} {coords[3]:.6f}\n"
+                        f.write(line)  # 直接写入文件
+                    else:
+                        # 处理无效坐标数据
+                        print(f"警告：跳过无效坐标数据（长度={len(coords)}）")
         return pred_dicts, ret_dicts
     
     def post_processing_onnx(self, data_dict):

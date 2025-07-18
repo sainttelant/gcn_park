@@ -188,8 +188,8 @@ def export_gnn_edge_model(model, cfg, device_id=0):
     submodel.eval()
         
         # 其余代码保持不变...
-    for param in submodel.parameters():
-        param.data =param.data.to(torch.float32)    
+    #for param in submodel.parameters():
+        #param.data =param.data.to(torch.float32)    
         
     
     gnn_out_dim = cfg.model.graph_encoder.gnn.proj_dim*2
