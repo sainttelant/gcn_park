@@ -736,6 +736,11 @@ void PsDet::process_points(
                     ParkingSlot slot;
                     slot.confidence = edge_prob;
                     slot.coords = {p1.x, p1.y, p2.x, p2.y};
+
+                    // 增加判断逻辑，这个python的edge推理不需要，可是c++ 需要判断角点数值不能太趋近于0，否则出错
+                    if (slot.coords[0] < 0.0001 || slot.coords[1] < 0.0001 || slot.coords[2] < 0.0001 || slot.coords[3] < 0.0001) {
+                        continue;
+                    }
                     batch_slots.push_back(slot);
                 }
             }
