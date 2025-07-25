@@ -225,6 +225,18 @@ def export_gnn_edge_model(model, cfg, device_id=0):
     print("输出节点名称和对应的维度:", [output.name for output in model.graph.output],
           [output.type.tensor_type.shape.dim for output in model.graph.output])
     
+    try:
+        from onnxsim import simplify 
+        model, check = simplify(model)
+        assert check, "Simplified ONNX model could not be validated" 
+        onnx.save(model, cfg.save_onnx_dir/"gnn_model_simplified.onnx")
+        print(f"Simplified GNN边预测模型已导出到 {cfg.save_onnx_dir/'gnn_model_simplified.onnx'}")
+    except ImportError:
+        print("未安装onnxsim，跳过简化模型")
+        
+        
+        
+        
 
 def export_model_to_onnx(model, cfg, device_id=0):
     # 设置使用的设备

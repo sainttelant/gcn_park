@@ -71,8 +71,8 @@ def main():
     model = build_model(cfg.model)
     logger.info(model)
     
-    #image_dir = Path(cfg.data_root) / 'testing' / 'outdoor-normal daylight'
-    image_dir = Path("images")
+    image_dir = Path(cfg.data_root) / 'testing' / 'indoor-parking lot'
+    #image_dir = Path("images")
     display = False
 
     # load checkpoint

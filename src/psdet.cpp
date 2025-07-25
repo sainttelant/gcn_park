@@ -611,9 +611,8 @@ void PsDet::process_points(
         // 1. 准备GNN输入数据 (descriptors)
         //const int num_points = actual_points.size();
           
-    
-         // points输入: [1, num_points, 2]
-        for (int i = 0; i < num_points; ++i) {
+        if (!actual_points.empty()) {
+            for (int i = 0; i < num_points; ++i) {
             gnn_points_h_[i * 2] = actual_points[i].x;     // x坐标
             gnn_points_h_[i * 2 + 1] = actual_points[i].y; // y坐标
             if (i >3) // 与python的保持一致
@@ -625,6 +624,14 @@ void PsDet::process_points(
             // 打印points数据
             //printf("points: %f, %f\n", gnn_points_h_[i * 2], gnn_points_h_[i * 2 + 1]);
         } 
+        
+        }
+        else
+        {
+            printf("actual_points is empty, and continue...\n");
+            continue;
+        }
+         // points输入: [1, num_points, 2]
         
         // 2. 传输数据到设备
         size_t desc_bytes = 1 * 128 * num_points * sizeof(float);
