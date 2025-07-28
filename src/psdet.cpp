@@ -289,6 +289,25 @@ bool PsDet::infer(const cv::Mat& image,
                    cudaMemcpyDeviceToHost, stream_);
     cudaStreamSynchronize(stream_);
 
+
+     /* std::ofstream output_points_file("images/predictions/points_pred_cpp.txt"), \
+    output_slots_file("images/predictions/output_slots_orig.txt");
+    for (const auto& point : output_points_h_) {
+        // 每存储一个就空行
+        output_points_file << std::endl;
+        output_points_file << std::fixed << std::setprecision(9) << point << " ";
+    }
+
+    output_points_file << std::endl;
+    for (const auto& slot : output_slots_h_) {
+        // 每存储一个就空行
+        output_slots_file << std::endl;
+        output_slots_file << std::fixed << std::setprecision(9) << slot << " ";
+    }
+    output_slots_file << std::endl;
+    output_points_file.close();
+    output_slots_file.close();   */
+
     // 7. 后处理
     postprocess(output_points, output_slots);
     return true;
@@ -525,12 +544,12 @@ void PsDet::process_points(
         cudaMemcpyAsync(sampled_descriptors_cpu, sampled_descriptors, required_mem, cudaMemcpyDeviceToHost, stream_);
 
         // 保存结果到txt中 ,经过验证是相同的
-    /*     std::ofstream file("images/predictions/descriptors_after_grid_sample_cpp.txt");
+         std::ofstream file("images/predictions/descriptors_after_grid_sample_cpp.txt");
         for (int i = 0; i < required_mem / sizeof(float); i++) {
             file <<std::setprecision(6) <<sampled_descriptors_cpu[i] << " ";
             file << std::endl;
         }
-        file.close(); */
+        file.close(); 
 
   
         // 4. 归一化描述符
@@ -561,12 +580,12 @@ void PsDet::process_points(
         cudaMemcpy(data_dict.descriptors.data(), out_normalized_d, 
                   required_mem, cudaMemcpyDeviceToHost);
 
-      /*   std::ofstream file("images/predictions/descriptors_after_normalize_cpp.txt");          
+       std::ofstream file_no("images/predictions/descriptors_after_normalize_cpp.txt");          
         for (int i =0; i < data_dict.descriptors.size(); i++) {
-            file <<std::setprecision(6) <<data_dict.descriptors[i] << " ";
-            file << std::endl;
+            file_no <<std::setprecision(6) <<data_dict.descriptors[i] << " ";
+            file_no << std::endl;
         }
-        file.close(); */
+        file_no.close(); 
 
         data_dict.points = actual_points;
 
@@ -661,6 +680,20 @@ void PsDet::process_points(
             gnn_graph_output_d_,  // binding 2: graph_output
             gnn_edge_pred_d_      // binding 3: edge_pred
         };
+
+
+        const char* input_name_des = gnn_engine_->getIOTensorName(0);
+        const char* input_name_points = gnn_engine_->getIOTensorName(1);
+        const char* output_name_graph = gnn_engine_->getIOTensorName(2);
+        const char* output_name_pred = gnn_engine_->getIOTensorName(3);
+
+        gnn_context_->setTensorAddress(input_name_des, gnn_bindings[0]);
+        gnn_context_->setTensorAddress(input_name_points, gnn_bindings[1]);
+        gnn_context_->setTensorAddress(output_name_graph, gnn_bindings[2]);
+        gnn_context_->setTensorAddress(output_name_pred, gnn_bindings[3]);
+
+
+
         
         if (!gnn_context_->enqueueV3( stream_)) {
             std::cerr << "GNN inference failed for batch " << b << std::endl;
@@ -793,7 +826,7 @@ void PsDet::postprocess(std::vector<std::vector<KeyPoint>>& output_points,
        }
     }
  
-    file.close(); */
+    file.close();  */ 
     
     // 处理槽位预测（假设描述符图在output_slots_h_中）
     process_slots(output_points, output_slots_h_.data(), 

@@ -340,7 +340,9 @@ __global__ void grid_sampler_3d_kernel(const int nthreads, const scalar_t *input
 }
 
 void create_desc(const int64_t *dims, int nb_dims, TensorDesc &desc) {
-  memcpy(&desc.shape[0], dims, sizeof(int) * nb_dims);
+
+
+  memcpy(&desc.shape[0], dims, sizeof(int64_t) * nb_dims);
   desc.stride[nb_dims - 1] = 1;
   for (int i = nb_dims - 2; i >= 0; --i) {
     desc.stride[i] = desc.stride[i + 1] * desc.shape[i + 1];

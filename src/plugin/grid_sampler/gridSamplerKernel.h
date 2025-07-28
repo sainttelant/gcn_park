@@ -15,8 +15,8 @@
 const int MAXTENSORDIMS = 10;
 
 struct TensorDesc {
-  int shape[MAXTENSORDIMS];
-  int stride[MAXTENSORDIMS];
+  int64_t shape[MAXTENSORDIMS];
+  int64_t stride[MAXTENSORDIMS];
   int dim;
 };
 
