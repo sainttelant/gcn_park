@@ -1,28 +1,47 @@
-//
-// Created by Derry Lin on 2022/10/22.
-//
+#pragma once
 
-#ifndef TENSORRT_OPS_GRIDSAMPLERKERNEL_H
-#define TENSORRT_OPS_GRIDSAMPLERKERNEL_H
-
-#include "cuda_int8.h"
 #include <cuda_runtime.h>
 
-enum class GridSamplerInterpolation { Bilinear, Nearest, Bicubic };
+
+#include <cuda_fp16.h>
+#include <stdio.h>
+
+#include <algorithm>
+#include <cmath>
+#include <vector>
+
+#include "common.h"
+
+const int MAXTENSORDIMS = 10;
+
+struct TensorDesc {
+  int shape[MAXTENSORDIMS];
+  int stride[MAXTENSORDIMS];
+  int dim;
+};
+
+#define CUDA_1D_KERNEL_LOOP(i, n) \
+  for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < (n); i += blockDim.x * gridDim.x)
+
+
+inline int GET_BLOCKS(const int N) {
+  int optimal_block_num = DIVUP(N, NUM_THREADS);
+  int max_block_num = 4096;
+  return std::min(optimal_block_num, max_block_num);
+}
+
+
+enum class GridSamplerInterpolation { Bilinear, Nearest };
 enum class GridSamplerPadding { Zeros, Border, Reflection };
 
 template <typename T>
-void grid_sample(T *output, const T *input, const T *grid, int64_t *output_dims,
-                 int64_t *input_dims, int64_t *grid_dims, int nb_dims,
-                 GridSamplerInterpolation interp, GridSamplerPadding padding,
-                 bool align_corners, cudaStream_t stream);
+void grid_sample(T *output, const T *input, const T *grid, int64_t *output_dims, int64_t *input_dims,
+                 int64_t *grid_dims, int nb_dims, GridSamplerInterpolation interp,
+                 GridSamplerPadding padding, bool align_corners, cudaStream_t stream);
 
-void grid_sample_int8(int8_4 *output, const float &scale_o, const int8_4 *input,
-                      const float &scale_i, const int8_4 *grid,
-                      const float &scale_g, int64_t *output_dims, int64_t *input_dims,
-                      int64_t *grid_dims, int nb_dims,
-                      GridSamplerInterpolation interp,
-                      GridSamplerPadding padding, bool align_corners,
-                      cudaStream_t stream);
 
-#endif // TENSORRT_OPS_GRIDSAMPLERKERNEL_H
+
+void compute_sample_grid_cuda(float* grid_dev, const float* transform, int bev_w, int bev_h,
+                                                                            cudaStream_t stream);
+
+

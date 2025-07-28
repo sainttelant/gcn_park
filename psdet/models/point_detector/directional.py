@@ -7,6 +7,16 @@ from .gcn import GCNEncoder, EdgePredictor
 from .post_process import calc_point_squre_dist, pass_through_third_point
 from .post_process import get_predicted_points, get_predicted_directional_points, pair_marking_points
 from .utils import define_halve_unit, define_detector_block, YetAnotherDarknet, vgg16, resnet18, resnet50
+from copy import deepcopy
+class PermissiveDict(dict):
+    """支持属性访问的字典类型"""
+    def __getattr__(self, name):
+        if name in self:
+            return self[name]
+        raise AttributeError(f"No such attribute: {name}")
+    
+    def __setattr__(self, name, value):
+        self[name] = value
 
 class PointDetector(nn.modules.Module):
     """Detector for point without direction."""
@@ -45,10 +55,21 @@ class PointDetector(nn.modules.Module):
                                         kernel_size=1, stride=1, padding=0, bias=False)]
         self.descriptor_map = nn.Sequential(*layers_descriptor)
 
+        
+        base_dim = cfg.descriptor_dim
         if cfg.use_gnn:
             self.graph_encoder = GCNEncoder(cfg.graph_encoder)
+            gnn_out_dim = cfg.graph_encoder.gnn.proj_dim
+        else:
+            gnn_out_dim = base_dim
+        
+  
+        edge_cfg = PermissiveDict(cfg.edge_predictor.copy())  # 创建新实例
+        edge_cfg.input_dim = 2 * gnn_out_dim  # 设置正确输入维度
 
-        self.edge_predictor = EdgePredictor(cfg.edge_predictor)
+        # 修复2: 使用正确的变量名
+        print(f"GNN输出维度: {gnn_out_dim}, EdgePredictor输入维度: {edge_cfg.input_dim}")
+        self.edge_predictor = EdgePredictor(edge_cfg)  # 使用edge_cfg而非cfg.edge_cfg
 
         if cfg.get('slant_predictor', None):
             self.slant_predictor = EdgePredictor(cfg.slant_predictor)
@@ -73,6 +94,7 @@ class PointDetector(nn.modules.Module):
             data_dict.update(pred_dict)
         else:
             data_dict['descriptor_map'] = descriptor_map
+            #data_dict['']
 
         return data_dict
 
@@ -91,11 +113,22 @@ class PointDetector(nn.modules.Module):
             data_dict['vacant_pred'] = pred_dict['edges_pred']
 
         if self.cfg.use_gnn:
-            data_dict = self.graph_encoder(data_dict)
+            data_dict = self.graph_encoder(data_dict) # 这个地方下采样了，从128 下采样到64，把descriptors从128下采样到64
 
+        # save data_dict['descriptors'] into txt file
+        import numpy as np
+        descriptors_2d = data_dict['descriptors'].cpu().numpy().reshape(data_dict['descriptors'].shape[0] * data_dict['descriptors'].shape[1], -1)
+        descriptors_2d = descriptors_2d.flatten()
+        np.savetxt('images/predictions/graph_output_python.txt', descriptors_2d,fmt='%.6f')
+        
         pred_dict = self.edge_predictor(data_dict)
 
         data_dict['edge_pred'] = pred_dict['edges_pred']
+        
+        edges_pred = data_dict['edge_pred'].cpu().numpy().reshape(data_dict['edge_pred'].shape[0] * data_dict['edge_pred'].shape[1], -1)
+        edges_pred = edges_pred.flatten()
+        np.savetxt('images/predictions/edge_pred_python.txt', edges_pred,fmt='%.6f')
+        
         return data_dict
 
     def sample_descriptors(self, descriptors, keypoints):
@@ -103,8 +136,11 @@ class PointDetector(nn.modules.Module):
         b, c, h, w = descriptors.shape
         keypoints = keypoints * 2 - 1  # normalize to (-1, 1)
         args = {'align_corners': True} if int(torch.__version__[2]) > 2 else {}
+        
+        
         descriptors = torch.nn.functional.grid_sample(
             descriptors, keypoints.view(b, 1, -1, 2), mode='bilinear', **args)
+
         # 使用npsavetxt save descriptors into txt
         import numpy as np
         descriptors_2d = descriptors.cpu().numpy().reshape(descriptors.shape[0] * descriptors.shape[1], -1)
@@ -114,6 +150,9 @@ class PointDetector(nn.modules.Module):
         
         descriptors = torch.nn.functional.normalize(
             descriptors.reshape(b, c, -1), p=2, dim=1)
+        descriptors_cpu = descriptors.cpu().numpy().reshape(b, c, -1)
+        descriptors_cpu = descriptors_cpu.flatten()
+        np.savetxt('images/predictions/descriptors_after_normalize_python.txt', descriptors_cpu,fmt='%.6f')
         return descriptors
 
     def get_targets_points(self, data_dict):
@@ -157,6 +196,8 @@ class PointDetector(nn.modules.Module):
   
         
         for b, marks in enumerate(points_pred):
+            print('marks.shape:',marks.shape)
+            print("b:",b)
             points_pred = get_predicted_points(marks, self.cfg.point_thresh, self.cfg.boundary_thresh)
 
             for i in range(len(points_pred)):
@@ -165,10 +206,10 @@ class PointDetector(nn.modules.Module):
                 x_val = points_pred[i][1][0]
                 y_val = points_pred[i][1][1]
 
-                output_data = np.column_stack((score, x_val, y_val))
+                #output_data = np.column_stack((score, x_val, y_val))
                 # 将数组写入文件
-                with open('images/predictions/output_points_python.txt', 'a') as f:
-                    np.savetxt(f, output_data, delimiter=' ', fmt="%.6f")
+                #with open('images/predictions/output_points_python.txt', 'a') as f:
+                    #np.savetxt(f, output_data, delimiter=' ', fmt="%.6f")
             points_pred_batch.append(points_pred)
          
             if len(points_pred) > 0:
@@ -181,7 +222,11 @@ class PointDetector(nn.modules.Module):
                 points_full[:len(points_pred)] = points_np
             else:
                 points_full = points_np
+            with open ('images/predictions/output_points_python.txt', 'a') as f:
+                np.savetxt(f, points_full, delimiter=' ', fmt="%.6f")
             pred_dict = self.predict_slots(descriptor_map[b].unsqueeze(0), torch.Tensor(points_full).unsqueeze(0).cuda())
+           
+           
             edges = pred_dict['edges_pred'][0]
             n = points_np.shape[0]
             m = points_full.shape[0]
@@ -201,6 +246,28 @@ class PointDetector(nn.modules.Module):
 
         pred_dicts['points_pred'] = points_pred_batch
         pred_dicts['slots_pred'] = slots_pred
+        # 修改后的代码
+        with open('images/predictions/slots_pred_python.txt', 'a') as f:
+            # 写入标题行
+            header = "confidence coord0 coord1 coord2 coord3"
+            f.write(header + "\n")  # 添加换行符[2,6](@ref)
+            
+            # 遍历所有batch的预测结果
+            for batch_slots in slots_pred:
+                # 遍历当前batch中的所有slot
+                for slot in batch_slots:
+                    # 提取置信度和坐标值
+                    confidence = slot[0]
+                    coords = slot[1]
+                    
+                    # 确保坐标有4个值
+                    if len(coords) == 4:
+                        # 格式化数据行：置信度+4个坐标值，保留6位小数
+                        line = f"{confidence:.6f} {coords[0]:.6f} {coords[1]:.6f} {coords[2]:.6f} {coords[3]:.6f}\n"
+                        f.write(line)  # 直接写入文件
+                    else:
+                        # 处理无效坐标数据
+                        print(f"警告：跳过无效坐标数据（长度={len(coords)}）")
         return pred_dicts, ret_dicts
     
     def post_processing_onnx(self, data_dict):

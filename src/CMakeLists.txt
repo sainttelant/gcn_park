@@ -1,17 +1,16 @@
 cmake_minimum_required(VERSION 3.14)
-project(ParkingSlotDetection)
+project(ParkingSlotDetection LANGUAGES CXX CUDA)  # 声明CUDA语言
 
 set(CMAKE_CXX_STANDARD 17)
 
-set(ARCH 87)  # 设置GPU架构 for ada5000 gpu
+
+set(ARCH 87)  # 设置GPU架构 for orin
 
 set(CMAKE_BUILD_TYPE "Debug")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O0")  # 合并标志
+set(CMAKE_CUDA_ARCHITECTURES ${ARCH})  # 现代GPU架构设置[4](@ref)
 
-# 添加下面的行为了禁止优化
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0")
-
-# 查找OpenCV
+# 依赖查找
 find_package(OpenCV REQUIRED)
 find_package(CUDA REQUIRED)
 
@@ -30,9 +29,10 @@ set(DEPS ${DEPS} nvcudla cudla cuda cudart cublas)  # 添加cublas库
 # 包含TensorRT头文件
 include_directories(${TENSORRT_DIR}
     ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/common
+    ${PROJECT_SOURCE_DIR}/plugin
     ${PROJECT_SOURCE_DIR}/plugin/grid_sampler
     ${PROJECT_SOURCE_DIR}/plugin/simpleplugin
-    ${PROJECT_SOURCE_DIR}/common
     ${OpenCV_INCLUDE_DIRS}
     ${CUDA_DIR}
 )
@@ -59,14 +59,12 @@ ${CUDA_LIB}
 ${CUDA_STUBS}
 )
 
-# 添加可执行文件
+# 可执行文件
 add_executable(psdet_demo 
     psdetdemo.cpp 
     psdet.cpp
 )
-
-# 链接库
-target_link_libraries(psdet_demo 
+target_link_libraries(psdet_demo PRIVATE
     ${OpenCV_LIBS}
     ${DEPS}
     nvinfer
@@ -77,5 +75,6 @@ target_link_libraries(psdet_demo
     cublas  # 添加cublas库
 )
 
-# 设置输出目录
+# 安装配置
+install(TARGETS ${shared_target} LIBRARY DESTINATION lib)
 set(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)

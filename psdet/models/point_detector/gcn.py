@@ -140,12 +140,12 @@ class GCNEncoder(nn.Module):
         desc = data_dict['descriptors'] # [B, desc_dim, num_points]
 
         x += desc
-        
+        print(f"GCN输入维度: {x.shape}") 
         # Multi-layer Transformer network.
         x = self.gnn(x)
 
         # MLP projection.
         x = self.proj(x)
-                
+        print(f"GCN输出维度: {x.shape}")  # 应等于cfg.graph_encoder.gnn.proj_dim          
         data_dict['descriptors'] = x
         return data_dict

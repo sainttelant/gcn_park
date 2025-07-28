@@ -42,4 +42,24 @@ trtexec --onnx=cache/ps_gat/100/output_onnx/model.onnx \
         --maxShapes=image:1x3x1024x1024 \
         >> trtexec_log.txt
 
+# trtexec convert gnn onnx 
+trtexec --onnx=cache/ps_gat/100/output_onnx/gnn_model.onnx \
+        --dumpLayerInfo \
+        --saveEngine=cache/ps_gat/100/output_onnx/gnn_new.engine \
+        --verbose \
+        --minShapes=descriptors:1x128x10,points:1x10x2  \
+        --optShapes=descriptors:1x128x50,points:1x50x2 \
+        --maxShapes=descriptors:1x128x100,points:1x100x2 \
+        >> trtexec_gnn_log.txt
+
+# trtextc convert gnn_model_simplified.onnx 
+trtexec --onnx=cache/ps_gat/100/output_onnx/gnn_model_simplified.onnx \
+        --dumpLayerInfo \
+        --saveEngine=cache/ps_gat/100/output_onnx/gnn_simplified_new.engine \
+        --verbose \
+        --minShapes=descriptors:1x128x10,points:1x10x2  \
+        --optShapes=descriptors:1x128x50,points:1x50x2 \
+        --maxShapes=descriptors:1x128x100,points:1x100x2 \
+        >> trtexec_gnn_simplified_log.txt
+
 

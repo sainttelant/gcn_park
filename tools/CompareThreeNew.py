@@ -150,6 +150,93 @@ class TensorRTEngineValidator:
         for buf in self.inputs + self.outputs:
             if 'device' in buf and buf['device']:
                 buf['device'].free()
+                
+def export_gnn_edge_model(model, cfg, device_id=0):
+    device = torch.device(f'cuda:{device_id}')
+    onnx_model_path = cfg.save_onnx_dir
+    # GNN边预测模型包装器
+    class GNNEdgeWrapper(torch.nn.Module):
+  
+        def __init__(self, graph_encoder, edge_predictor):
+            super().__init__()
+            self.graph_encoder = graph_encoder
+            self.edge_predictor = edge_predictor
+            
+        def forward(self, descriptors,points):
+            data_dict = {
+                'descriptors': descriptors,
+                'points': points
+            }
+            
+            # 处理GNN分支
+            #if self.graph_encoder is not None:
+            data_dict = self.graph_encoder(data_dict)
+            graph_output = data_dict['descriptors']
+            #else:
+                #graph_output = descriptors
+            
+            # 边预测
+            data_dict = self.edge_predictor(data_dict)
+            return graph_output, data_dict['edges_pred']
+        
+        # 创建模型实例
+        # 创建包装器实例
+    submodel = GNNEdgeWrapper(
+        graph_encoder=model.model.graph_encoder,
+        edge_predictor=model.model.edge_predictor  # 修正属性路径[1](@ref)
+    ).to(device)
+    submodel.eval()
+        
+        # 其余代码保持不变...
+    #for param in submodel.parameters():
+        #param.data =param.data.to(torch.float32)    
+        
+    
+    gnn_out_dim = cfg.model.graph_encoder.gnn.proj_dim*2
+    B, N = 1, cfg.model.max_points
+    dummy_desc = torch.randn(B, gnn_out_dim, N).to(device)  # [1, 128, 10]
+    dummy_points = torch.rand(B, N, 2).to(device)  #[1,10,2]   
+    print(f"输入维度: descriptors={dummy_desc.shape}, points={dummy_points.shape}")    
+    
+        # 导出ONNX
+    dynamic_axes = {
+        'descriptors': {0: 'batch_size', 2: 'num_points'},
+        'points': {0: 'batch_size', 1: 'num_points'},
+        'edge_pred': {0: 'batch_size', 2: 'num_edges'}
+    }
+    
+    torch.onnx.export(
+        submodel, 
+        (dummy_desc,dummy_points),
+        onnx_model_path/"gnn_model.onnx",
+        input_names=['descriptors','points'],
+        output_names=['graph_output', 'edge_pred'],
+        opset_version=14,
+        dynamic_axes=dynamic_axes
+    )
+    
+    # 打印信息
+    # 打印输出节点名称和维度
+    
+    
+    print(f"GNN边预测模型已导出到 {cfg.save_onnx_dir/'gnn_model.onnx'}")
+    model = onnx.load("cache/ps_gat/100/output_onnx/gnn_model.onnx")
+    print("输入节点名称:", [input.name for input in model.graph.input])
+    print("输出节点名称和对应的维度:", [output.name for output in model.graph.output],
+          [output.type.tensor_type.shape.dim for output in model.graph.output])
+    
+    try:
+        from onnxsim import simplify 
+        model, check = simplify(model)
+        assert check, "Simplified ONNX model could not be validated" 
+        onnx.save(model, cfg.save_onnx_dir/"gnn_model_simplified.onnx")
+        print(f"Simplified GNN边预测模型已导出到 {cfg.save_onnx_dir/'gnn_model_simplified.onnx'}")
+    except ImportError:
+        print("未安装onnxsim，跳过简化模型")
+        
+        
+        
+        
 
 def export_model_to_onnx(model, cfg, device_id=0):
     # 设置使用的设备
@@ -193,7 +280,8 @@ def export_model_to_onnx(model, cfg, device_id=0):
         def forward(self, image):
             input_dict = {'image': image}
             data_dict = self.model(input_dict)
-            points_pred = data_dict['points_pred']
+            points_pred = data_dict['points_pred']     
+           
 
             if 'descriptor_map' in data_dict:
                 descriptor_map = data_dict['descriptor_map']
@@ -216,6 +304,7 @@ def export_model_to_onnx(model, cfg, device_id=0):
         points_pred, descriptor_map = wrapped_model(image_tensor)
         print(f"points_pred shape: {points_pred.shape}")
         print(f"descriptor_map shape: {descriptor_map.shape}")
+       
 
     # 导出模型到 ONNX 格式
     torch.onnx.export(
@@ -253,8 +342,8 @@ def export_model_to_onnx(model, cfg, device_id=0):
         simplified_model, check = simplify(onnx_model)
         onnx.save(simplified_model, simplified_path/"model_simplified.onnx")
         print(f"ONNX模型简化完成，保存到: {simplified_path}")
-        """
-        model = onnx.load(simplified_path/"model_simplified.onnx")
+        
+        model = onnx.load(simplified_path/"model.onnx")
         for input in model.graph.input:
             if input.name == "image":  # 替换为你的输入名称
                 # 清除动态维度标记
@@ -262,7 +351,7 @@ def export_model_to_onnx(model, cfg, device_id=0):
                 input.type.tensor_type.shape.dim[2].dim_value = 512  # height
                 input.type.tensor_type.shape.dim[3].dim_value = 512  # width
         onnx.save(model, simplified_path/"fixed_model.onnx")
-        """
+        
     except ImportError:
         print("警告: onnx-simplifier 未安装，跳过模型简化步骤")
     except Exception as e:
@@ -390,4 +479,5 @@ if __name__ == '__main__':
     device = torch.device('cuda:0')
     model.to(device)
 
-    export_model_to_onnx(model, cfg, device_id=0)
+    #export_model_to_onnx(model, cfg, device_id=0)
+    export_gnn_edge_model(model, cfg, device_id=0)

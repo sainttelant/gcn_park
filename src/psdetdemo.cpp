@@ -98,6 +98,7 @@ int main() {
     // 配置参数
     const std::string onnx_path = "cache/ps_gat/100/output_onnx/model.onnx";
     const std::string engine_path = "cache/ps_gat/100/output_onnx/new.engine";
+    const std::string gnn_engine_path = "cache/ps_gat/100/output_onnx/gnn_simplified_new.engine";
     //const std::string engine_path = "new.engine";
     const int input_width = 512;
     const int input_height = 512;
@@ -130,6 +131,11 @@ int main() {
             return 1;
         }
     } 
+
+    if (!detector.loadGNNModel(gnn_engine_path)) {
+        std::cerr << "Failed to load GNN model" << std::endl;
+        return -1;
+    }
     
     // 遍历处理每张图片
     for (const auto& img_path : image_paths) {
