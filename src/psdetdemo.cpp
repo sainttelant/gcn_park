@@ -106,7 +106,9 @@ int main() {
     const int max_slots_original = 1*128*16*16;
 
     // 图片目录设置
-    const std::string image_dir = "images/";
+    //const std::string image_dir = "images/";
+
+    const std::string image_dir = "datasets/parking_slot/testing/outdoor-rainy/";
     std::vector<std::string> image_paths = getJpgImagesInDirectory(image_dir);
 
     if (image_paths.empty()) {
@@ -163,12 +165,12 @@ int main() {
         }
         
         // 输出推理结果
-        std::cout << "  推理时间: " 
+        std::cout << "  Inference totally time: " 
                   << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() 
                   << "ms" << std::endl;
         
 
-        std::string car_png = "/workspace/APA/gcn-parking-slot/images/car.png";
+        std::string car_png = "images/car.png";
         cv::Mat car = cv::imread(car_png, cv::IMREAD_UNCHANGED);
 
 
@@ -180,10 +182,11 @@ int main() {
         std::string predictions_dir = image_dir + "predictions/";
         if (!fs::exists(predictions_dir)) {
             fs::create_directory(predictions_dir);
+            //std::string output_path = predictions_dir + fs::path(img_path).filename().string()+"_c_result.jpg";
+            //cv::imwrite(output_path, image);
         }
 
-        std::string output_path = predictions_dir + fs::path(img_path).filename().string()+"_c_result.jpg";
-        cv::imwrite(output_path, image);
+        
     }
     
     std::cout << "\n处理完成！共处理 " << image_paths.size() << " 张图片" << std::endl;

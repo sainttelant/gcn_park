@@ -51,6 +51,9 @@ bool PsDet::initBuffers() {
     cudaMalloc(&output_points_d_, output_points_h_.size() * sizeof(float));
     cudaMalloc(&output_slots_d_, output_slots_h_.size() * sizeof(float));
     cudaStreamCreate(&stream_);
+
+
+    
     
     return input_d_ && output_points_d_ && output_slots_d_ && stream_;
 }
@@ -254,6 +257,10 @@ bool PsDet::infer(const cv::Mat& image,
 
     // 2. 预处理图像并拷贝到GPU
     preprocess(image, input_h_.data());
+
+
+    // print start time for inference
+    auto start = std::chrono::high_resolution_clock::now();
     cudaMemcpyAsync(input_d_, input_h_.data(), 
                    input_h_.size() * sizeof(float), 
                    cudaMemcpyHostToDevice, stream_);
@@ -288,6 +295,10 @@ bool PsDet::infer(const cv::Mat& image,
                    output_slots_h_.size() * sizeof(float),
                    cudaMemcpyDeviceToHost, stream_);
     cudaStreamSynchronize(stream_);
+
+    auto end = std::chrono::high_resolution_clock::now();
+
+    std::cout << "Inference main network time: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms" << std::endl;
 
 
      /* std::ofstream output_points_file("images/predictions/points_pred_cpp.txt"), \
@@ -544,13 +555,13 @@ void PsDet::process_points(
         cudaMemcpyAsync(sampled_descriptors_cpu, sampled_descriptors, required_mem, cudaMemcpyDeviceToHost, stream_);
 
         // 保存结果到txt中 ,经过验证是相同的
-         std::ofstream file("images/predictions/descriptors_after_grid_sample_cpp.txt");
+        /*  std::ofstream file("images/predictions/descriptors_after_grid_sample_cpp.txt");
         for (int i = 0; i < required_mem / sizeof(float); i++) {
             file <<std::setprecision(6) <<sampled_descriptors_cpu[i] << " ";
             file << std::endl;
         }
         file.close(); 
-
+ */
   
         // 4. 归一化描述符
 
@@ -580,12 +591,12 @@ void PsDet::process_points(
         cudaMemcpy(data_dict.descriptors.data(), out_normalized_d, 
                   required_mem, cudaMemcpyDeviceToHost);
 
-       std::ofstream file_no("images/predictions/descriptors_after_normalize_cpp.txt");          
+       /* std::ofstream file_no("images/predictions/descriptors_after_normalize_cpp.txt");          
         for (int i =0; i < data_dict.descriptors.size(); i++) {
             file_no <<std::setprecision(6) <<data_dict.descriptors[i] << " ";
             file_no << std::endl;
         }
-        file_no.close(); 
+        file_no.close();  */
 
         data_dict.points = actual_points;
 
@@ -620,6 +631,10 @@ void PsDet::process_points(
          // points输入: [1, num_points, 2]
         
         // 2. 传输数据到设备
+
+        auto start_gnn_time = std::chrono::high_resolution_clock::now();
+
+
         size_t desc_bytes = 1 * 128 * num_points * sizeof(float);
         cudaMemcpyAsync(gnn_descriptors_d_, data_dict.descriptors.data(),
                        desc_bytes, cudaMemcpyHostToDevice, stream_);
@@ -710,6 +725,10 @@ void PsDet::process_points(
                       graph_output_bytes, cudaMemcpyDeviceToHost, stream_);
         cudaStreamSynchronize(stream_);
 
+
+        auto end_gnn_time = std::chrono::high_resolution_clock::now();
+
+        std::cout << "GNN inference time for batch " << b << ": "<< std::chrono::duration_cast<std::chrono::milliseconds>(end_gnn_time - start_gnn_time).count() << "ms" << std::endl;
         // 保存结果到txt
         
        /*  std::ofstream file_edge("images/predictions/edge_pred_cpp.txt");
@@ -1005,8 +1024,9 @@ void PsDet::visualizeResults(cv::Mat & car,cv::Mat& image,
     cv::putText(image, stats, cv::Point(10, 30), 
                cv::FONT_HERSHEY_DUPLEX, 0.8, cv::Scalar(0, 0, 255), 2);
     // show image
-    //cv::imshow("Parking Slot Detection", image);
-    //cv::waitKey(50);
+    cv::namedWindow("Parking Slot Detection", cv::WINDOW_NORMAL);
+    cv::imshow("Parking Slot Detection", image);
+    cv::waitKey(100);
 }
 
 cv::Size PsDet::getInputSize() const {

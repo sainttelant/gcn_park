@@ -6,8 +6,8 @@ set(CMAKE_CXX_STANDARD 17)
 
 set(ARCH 87)  # 设置GPU架构 for orin
 
-set(CMAKE_BUILD_TYPE "Debug")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O0")  # 合并标志
+set(CMAKE_BUILD_TYPE "Release")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -O2")  # 合并标志
 set(CMAKE_CUDA_ARCHITECTURES ${ARCH})  # 现代GPU架构设置[4](@ref)
 
 # 依赖查找

@@ -15,6 +15,7 @@ namespace psdet {
 
 using namespace nvinfer1;
 
+
 class Logger : public ILogger 
 {
 public:
@@ -80,8 +81,6 @@ public:
        struct SlotData {
             std::vector<float> descriptors;
             std::vector<KeyPoint> points;
-            std::vector<float> slant_pred;
-            std::vector<float> vacant_pred;
             std::vector<float> graph_output;
             std::vector<float> edge_pred;
         };
@@ -92,7 +91,7 @@ private:
     IRuntime* runtime_ = nullptr;
     ICudaEngine* engine_ = nullptr;
     IExecutionContext* context_ = nullptr;
-    cudaStream_t stream_ = nullptr;
+    cudaStream_t stream_= nullptr;
 
     std::string onnx_path_;
     std::string engine_path_;
@@ -129,7 +128,24 @@ private:
     std::vector<float> gnn_edge_pred_h_;   // edge_pred输出(host)
     std::vector<float> gnn_graph_output_h_; // graph_output输出(host)
 
-    
+    // 多流操作和事件
+
+    cudaEvent_t host2device_event_ = nullptr;
+    cudaEvent_t inference_event_mainstage_ = nullptr;
+
+
+   /*  cudaStream_t h2d_stream_ = nullptr;
+    cudaStream_t inference_stream_mainstage_ = nullptr;
+    cudaStream_t d2h_stream_ = nullptr; */
+
+    // 固定内存
+
+    float* pinned_input_ = nullptr;
+    float* pinned_output_points_ = nullptr;
+    float* pinned_output_slots_ = nullptr;
+
+
+
     
     float point_thresh_ = 0.008f;
     float slot_thresh_ = 0.05f;
