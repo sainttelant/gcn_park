@@ -32,11 +32,29 @@ PsDet::PsDet(const std::string& onnx_path,
     gnn_edge_pred_h_.resize(max_points * max_points); // [1, 1, max_points*max_points] 实际是 [1,1,100]
     gnn_graph_output_h_.resize(max_points * 64);  // [1, 64, max_points]   实际是 [1,64,10]
 
+
+     // 创建CUDA流和事件
+    cudaStreamCreate(&h2d_stream_);
+    cudaStreamCreate(&inference_stream_);
+    cudaStreamCreate(&d2h_stream_);
+    cudaEventCreate(&h2d_event_);
+    cudaEventCreate(&inference_event_);
+
+
 }
 
 // 析构函数 - 修复销毁顺序[8](@ref)
 PsDet::~PsDet() {
     // 只destroy主要前端网络的buffers
+
+    if (h2d_stream_) cudaStreamDestroy(h2d_stream_);
+    if (inference_stream_) cudaStreamDestroy(inference_stream_);
+    if (d2h_stream_) cudaStreamDestroy(d2h_stream_);
+    if (h2d_event_) cudaEventDestroy(h2d_event_);
+    if (inference_event_) cudaEventDestroy(inference_event_);
+    h2d_stream_ = inference_stream_ = d2h_stream_ = nullptr;
+
+
     destroyBuffers();
     delete context_;   // 替换 context_->destroy()
     delete engine_;    // 替换 engine_->destroy()
@@ -50,12 +68,19 @@ bool PsDet::initBuffers() {
     cudaMalloc(&input_d_, input_h_.size() * sizeof(float));
     cudaMalloc(&output_points_d_, output_points_h_.size() * sizeof(float));
     cudaMalloc(&output_slots_d_, output_slots_h_.size() * sizeof(float));
-    cudaStreamCreate(&stream_);
+
+     // 初始化固定的内存块
+
+    cudaMallocHost(&pinned_input_,input_h_.size() * sizeof(float));
+    cudaMallocHost(&pinned_output_points_,output_points_h_.size() * sizeof(float));
+    cudaMallocHost(&pinned_output_slots_,output_slots_h_.size() * sizeof(float));
+
+  
 
 
-    
-    
-    return input_d_ && output_points_d_ && output_slots_d_ && stream_;
+    cudaStreamCreate(&stream_gnn_);
+    //return input_d_ && output_points_d_ && output_slots_d_ && stream_;
+    return input_d_ && output_points_d_ && output_slots_d_&& stream_gnn_;
 }
 
 // 销毁CUDA缓冲区
@@ -63,10 +88,17 @@ void PsDet::destroyBuffers() {
     if (input_d_) cudaFree(input_d_);
     if (output_points_d_) cudaFree(output_points_d_);
     if (output_slots_d_) cudaFree(output_slots_d_);
-    if (stream_) cudaStreamDestroy(stream_);
+    if (stream_gnn_) cudaStreamDestroy(stream_gnn_);
     
     input_d_ = output_points_d_ = output_slots_d_ = nullptr;
-    stream_ = nullptr;
+
+    // 释放固定内存块
+    if (pinned_input_) cudaFreeHost(pinned_input_);
+    if (pinned_output_points_) cudaFreeHost(pinned_output_points_);
+    if (pinned_output_slots_) cudaFreeHost(pinned_output_slots_);
+    pinned_input_ = pinned_output_points_ = pinned_output_slots_ = nullptr;
+
+   
 }
 
     
@@ -261,63 +293,47 @@ bool PsDet::infer(const cv::Mat& image,
 
     // print start time for inference
     auto start = std::chrono::high_resolution_clock::now();
-    cudaMemcpyAsync(input_d_, input_h_.data(), 
-                   input_h_.size() * sizeof(float), 
-                   cudaMemcpyHostToDevice, stream_);
 
-    // 3. 设置动态输入形状
-    nvinfer1::Dims input_dims = engine_->getTensorShape(input_name);
-    input_dims.d[0] = 1;  // 显式设置batch size=1
-    input_dims.d[2] = input_height_;
-    input_dims.d[3] = input_width_;
-    if (!context_->setInputShape(input_name, input_dims)) {
-        logger_.log(ILogger::Severity::kERROR, "Failed to set input shape");
-        return false;
-    }
+    // 2. 多流异步流水线
+    // ===== 流1: H2D拷贝 =====
+    const size_t input_size = max_batch_size_ * input_channels_ * input_height_ * input_width_;
+    cudaMemcpyAsync(input_d_, pinned_input_, input_size * sizeof(float), 
+                   cudaMemcpyHostToDevice, h2d_stream_);
+    cudaEventRecord(h2d_event_, h2d_stream_);
 
-    // 4. 绑定所有张量地址（关键修复点）
+    // ===== 流2: 推理计算 =====
+    cudaStreamWaitEvent(inference_stream_, h2d_event_, 0);
+    
     void* bindings[] = {input_d_, output_points_d_, output_slots_d_};
-    context_->setTensorAddress(input_name, bindings[0]);
-    context_->setTensorAddress(output_points_name, bindings[1]);
-    context_->setTensorAddress(output_slots_name, bindings[2]);
+    context_->enqueueV3(inference_stream_);
+    cudaEventRecord(inference_event_, inference_stream_);
 
-    // 5. 执行异步推理
-    if (!context_->enqueueV3(stream_)) {
-        logger_.log(ILogger::Severity::kERROR, "Inference enqueue failed");
-        return false;
-    }
+    // ===== 流3: D2H拷贝 =====
+    cudaStreamWaitEvent(d2h_stream_, inference_event_, 0);
+    const size_t points_size = max_batch_size_ * 3 * 16 * 16;
+    const size_t slots_size = max_batch_size_ * 128 * 16 * 16;
+    cudaMemcpyAsync(pinned_output_points_, output_points_d_, 
+                   points_size * sizeof(float), cudaMemcpyDeviceToHost, d2h_stream_);
+    cudaMemcpyAsync(pinned_output_slots_, output_slots_d_, 
+                   slots_size * sizeof(float), cudaMemcpyDeviceToHost, d2h_stream_);
 
-    // 6. 异步拷贝结果并同步流
-    cudaMemcpyAsync(output_points_h_.data(), output_points_d_, 
-                   output_points_h_.size() * sizeof(float),
-                   cudaMemcpyDeviceToHost, stream_);
-    cudaMemcpyAsync(output_slots_h_.data(), output_slots_d_, 
-                   output_slots_h_.size() * sizeof(float),
-                   cudaMemcpyDeviceToHost, stream_);
-    cudaStreamSynchronize(stream_);
-
+    // 3. 同步结果流
+    cudaStreamSynchronize(d2h_stream_);
     auto end = std::chrono::high_resolution_clock::now();
+    
+    std::cout << "多流推理时间: " 
+              << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() 
+              << " ms" << std::endl;
 
-    std::cout << "Inference main network time: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms" << std::endl;
-
-
-     /* std::ofstream output_points_file("images/predictions/points_pred_cpp.txt"), \
-    output_slots_file("images/predictions/output_slots_orig.txt");
-    for (const auto& point : output_points_h_) {
-        // 每存储一个就空行
-        output_points_file << std::endl;
-        output_points_file << std::fixed << std::setprecision(9) << point << " ";
+    memcpy(output_points_h_.data(), pinned_output_points_, points_size * sizeof(float));
+    memcpy(output_slots_h_.data(), pinned_output_slots_, slots_size * sizeof(float));
+    
+    for ( int i = 0; i < 768; ++i) {
+        
+        std::cout << output_points_h_[i] << " ";
     }
 
-    output_points_file << std::endl;
-    for (const auto& slot : output_slots_h_) {
-        // 每存储一个就空行
-        output_slots_file << std::endl;
-        output_slots_file << std::fixed << std::setprecision(9) << slot << " ";
-    }
-    output_slots_file << std::endl;
-    output_points_file.close();
-    output_slots_file.close();   */
+
 
     // 7. 后处理
     postprocess(output_points, output_slots);
@@ -511,7 +527,7 @@ void PsDet::process_points(
         }
         else{
             std::cout << "CUDA malloc success: " << required_mem / 1024 << " KB" << std::endl;
-            cudaMemcpyAsync(descriptor_map_gpu, descriptor_map+b*desc_channels*desc_height*desc_width, required_mem2, cudaMemcpyHostToDevice, stream_);
+            cudaMemcpyAsync(descriptor_map_gpu, descriptor_map+b*desc_channels*desc_height*desc_width, required_mem2, cudaMemcpyHostToDevice, stream_gnn_);
         }
 
                
@@ -520,7 +536,7 @@ void PsDet::process_points(
         size_t grid_bytes = num_points * 2 * sizeof(float); // 确保32字节
         cudaMalloc((void**)&d_grid_points, grid_bytes);
         cudaMemcpyAsync(d_grid_points, grid_points.data(), grid_bytes, 
-                            cudaMemcpyHostToDevice, stream_);
+                            cudaMemcpyHostToDevice, stream_gnn_);
         
         printf("before grid sample <<<<<<<<<<<<<<<<<<<<<<<\n");
         // 调用grid_sample内核
@@ -535,11 +551,11 @@ void PsDet::process_points(
             GridSamplerInterpolation::Bilinear,
             GridSamplerPadding::Zeros,
             false,
-            stream_
+            stream_gnn_
         );  
 
         // 检查内核执行错误
-        cudaStreamSynchronize(stream_);
+        cudaStreamSynchronize(stream_gnn_);
         cudaError_t err_sample = cudaGetLastError();
         if (err_sample != cudaSuccess) {
             std::cerr << "CUDA error: " << cudaGetErrorString(err_sample) 
@@ -552,7 +568,7 @@ void PsDet::process_points(
         // 存放sampled_descriptors的结果到cpu中来看下：
         float* sampled_descriptors_cpu = nullptr;
         sampled_descriptors_cpu = (float*)malloc(required_mem);
-        cudaMemcpyAsync(sampled_descriptors_cpu, sampled_descriptors, required_mem, cudaMemcpyDeviceToHost, stream_);
+        cudaMemcpyAsync(sampled_descriptors_cpu, sampled_descriptors, required_mem, cudaMemcpyDeviceToHost, stream_gnn_);
 
         // 保存结果到txt中 ,经过验证是相同的
         /*  std::ofstream file("images/predictions/descriptors_after_grid_sample_cpp.txt");
@@ -577,9 +593,9 @@ void PsDet::process_points(
         desc_channels,
         desc_channels,
         1e-12f,
-        stream_);
+        stream_gnn_);
            
-        cudaStreamSynchronize(stream_);
+        cudaStreamSynchronize(stream_gnn_);
 
         // 5. 构建数据字典
         SlotData data_dict;
@@ -637,11 +653,11 @@ void PsDet::process_points(
 
         size_t desc_bytes = 1 * 128 * num_points * sizeof(float);
         cudaMemcpyAsync(gnn_descriptors_d_, data_dict.descriptors.data(),
-                       desc_bytes, cudaMemcpyHostToDevice, stream_);
+                       desc_bytes, cudaMemcpyHostToDevice, stream_gnn_);
         
         size_t points_bytes = num_points * 2 * sizeof(float);
         cudaMemcpyAsync(gnn_points_d_, gnn_points_h_.data(),
-                       points_bytes, cudaMemcpyHostToDevice, stream_);
+                       points_bytes, cudaMemcpyHostToDevice, stream_gnn_);
 
 
         
@@ -710,7 +726,7 @@ void PsDet::process_points(
 
 
         
-        if (!gnn_context_->enqueueV3( stream_)) {
+        if (!gnn_context_->enqueueV3( stream_gnn_)) {
             std::cerr << "GNN inference failed for batch " << b << std::endl;
             continue;
         }
@@ -720,10 +736,10 @@ void PsDet::process_points(
         size_t graph_output_bytes = num_points * 64 * sizeof(float);
         
         cudaMemcpyAsync(gnn_edge_pred_h_.data(), gnn_edge_pred_d_,
-                      edge_pred_bytes, cudaMemcpyDeviceToHost, stream_);
+                      edge_pred_bytes, cudaMemcpyDeviceToHost, stream_gnn_);
         cudaMemcpyAsync(gnn_graph_output_h_.data(), gnn_graph_output_d_,
-                      graph_output_bytes, cudaMemcpyDeviceToHost, stream_);
-        cudaStreamSynchronize(stream_);
+                      graph_output_bytes, cudaMemcpyDeviceToHost, stream_gnn_);
+        cudaStreamSynchronize(stream_gnn_);
 
 
         auto end_gnn_time = std::chrono::high_resolution_clock::now();
@@ -835,7 +851,7 @@ void PsDet::postprocess(std::vector<std::vector<KeyPoint>>& output_points,
     process_points(output_points_h_.data(), output_points, actual_batch_size);
 
     // write output_points to txt file 
-    /* std::ofstream file("images/predictions/output_points_cpp.txt");
+    std::ofstream file("images/predictions/output_points_cpp.txt");
     
     if (!output_points.empty()) {
        for (const auto& points : output_points) {
@@ -845,7 +861,7 @@ void PsDet::postprocess(std::vector<std::vector<KeyPoint>>& output_points,
        }
     }
  
-    file.close();  */ 
+    file.close();   
     
     // 处理槽位预测（假设描述符图在output_slots_h_中）
     process_slots(output_points, output_slots_h_.data(), 

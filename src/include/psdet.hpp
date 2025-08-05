@@ -91,8 +91,6 @@ private:
     IRuntime* runtime_ = nullptr;
     ICudaEngine* engine_ = nullptr;
     IExecutionContext* context_ = nullptr;
-    cudaStream_t stream_= nullptr;
-
     std::string onnx_path_;
     std::string engine_path_;
     int max_batch_size_;
@@ -130,8 +128,7 @@ private:
 
     // 多流操作和事件
 
-    cudaEvent_t host2device_event_ = nullptr;
-    cudaEvent_t inference_event_mainstage_ = nullptr;
+ 
 
 
    /*  cudaStream_t h2d_stream_ = nullptr;
@@ -153,8 +150,15 @@ private:
     int max_points_cfg = 10;
     
     Config cfg_;
-  
+        // 多流和事件 (放在最后)
+    cudaEvent_t h2d_event_ = nullptr;
+    cudaEvent_t inference_event_ = nullptr;
 
+    cudaStream_t h2d_stream_ = nullptr;
+    cudaStream_t inference_stream_ = nullptr;
+    cudaStream_t d2h_stream_ = nullptr;  
+    cudaStream_t stream_gnn_ = nullptr;
+    
     void preprocess(const cv::Mat& image, float* input);
     void postprocess(std::vector<std::vector<KeyPoint>>& output_points,
                      std::vector<std::vector<ParkingSlot>>& output_slots);
