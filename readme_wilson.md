@@ -1,6 +1,6 @@
 
 # develop in container
-docker run --shm-size=16g --privileged -it --gpus all  -v /home/wilsxue/APA:/workspace/APA  --name gcn_wilson vad_torch1.12_x86_v1.0 /bin/bash
+docker run -it --gpus all  -v /home/wilsxue/APA:/workspace/APA  --name gcn_wilson vad_torch1.12_x86_v1.0 /bin/bash
 
 # develop in container for export onnx 
 docker run --shm-size=16g --privileged -it --gpus '"device=1"'  -v /home/wilsxue/APA:/workspace/APA  --name gcn_onnx gcn_docker_conda /bin/bash

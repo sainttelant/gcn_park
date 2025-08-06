@@ -278,17 +278,22 @@ bool PsDet::infer(const cv::Mat& image,
     }
 
     // 1. 获取张量名称（显式批处理模式要求使用名称而非索引）
-    const char* input_name = engine_->getIOTensorName(0);
-    const char* output_points_name = engine_->getIOTensorName(1);
-    const char* output_slots_name = engine_->getIOTensorName(2);
-    
+        const char* input_name = engine_->getIOTensorName(0);  // 实际名称可能非"image"
+        const char* output_points_name = engine_->getIOTensorName(1);
+        const char* output_slots_name = engine_->getIOTensorName(2);
+        
+        // 2. 显式绑定输入地址
+        context_->setInputTensorAddress(input_name, input_d_);      // 绑定输入设备内存
+        context_->setTensorAddress(output_points_name, output_points_d_);  // 绑定输出设备内存
+        context_->setTensorAddress(output_slots_name, output_slots_d_);
+
     if (!input_name || !output_points_name || !output_slots_name) {
         logger_.log(ILogger::Severity::kERROR, "Failed to get tensor names");
         return false;
     }
 
     // 2. 预处理图像并拷贝到GPU
-    preprocess(image, input_h_.data());
+    preprocess(image, pinned_input_);
 
 
     // print start time for inference
@@ -297,14 +302,17 @@ bool PsDet::infer(const cv::Mat& image,
     // 2. 多流异步流水线
     // ===== 流1: H2D拷贝 =====
     const size_t input_size = max_batch_size_ * input_channels_ * input_height_ * input_width_;
-    cudaMemcpyAsync(input_d_, pinned_input_, input_size * sizeof(float), 
+    cudaMemcpyAsync(input_d_, pinned_input_,  input_size * sizeof(float), 
                    cudaMemcpyHostToDevice, h2d_stream_);
+
     cudaEventRecord(h2d_event_, h2d_stream_);
 
     // ===== 流2: 推理计算 =====
     cudaStreamWaitEvent(inference_stream_, h2d_event_, 0);
     
     void* bindings[] = {input_d_, output_points_d_, output_slots_d_};
+
+
     context_->enqueueV3(inference_stream_);
     cudaEventRecord(inference_event_, inference_stream_);
 
@@ -328,13 +336,7 @@ bool PsDet::infer(const cv::Mat& image,
     memcpy(output_points_h_.data(), pinned_output_points_, points_size * sizeof(float));
     memcpy(output_slots_h_.data(), pinned_output_slots_, slots_size * sizeof(float));
     
-    for ( int i = 0; i < 768; ++i) {
-        
-        std::cout << output_points_h_[i] << " ";
-    }
-
-
-
+   
     // 7. 后处理
     postprocess(output_points, output_slots);
     return true;
